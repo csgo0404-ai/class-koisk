@@ -175,16 +175,27 @@
         .edit-price.is-plus { color: #4CAF50; }
         .add-card { border: 2px dashed #BCAAA4; background: #FFFDF9; cursor: pointer; display: flex; justify-content: center; align-items: center; min-height: 140px; }
         .add-card:hover { border-color: #FFB366; background: #FFF8E1; }
+/* 🎒 이벤트 상점 이동 버튼 스타일 추가 */
+      .btn-event-shop:active { 
+    transform: translateY(4px); 
+    box-shadow: none; 
+}
     </style>
 </head>
 <body>
 
     <div class="main-content">
-        <header>
-            <div class="title-area" onclick="openAdminSettings()">
-                🏪 꽃구름 상점
-            </div>
-        </header>
+      <header>
+    <div class="title-area" onclick="openAdminSettings()">
+        🏪 꽃구름 상점
+    </div>
+    
+    <div class="title-area" onclick="window.open('https://csgo0404-ai.github.io/class-store/', '_blank')">
+        🍪
+    </div>
+</header>
+
+
         <div class="student-grid" id="studentGrid">
             </div>
     </div>

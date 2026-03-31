@@ -13,14 +13,16 @@
         import { getDatabase, ref, set, get, child, update, onValue } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js";
 
         const firebaseConfig = {
-            apiKey: "AIzaSyAnVsQlFox_s9r0JBiTyXgzchCqY-WSrR0",
-            authDomain: "class-store-58db1.firebaseapp.com",
-            databaseURL: "https://class-store-58db1-default-rtdb.firebaseio.com",
-            projectId: "class-store-58db1",
-            storageBucket: "class-store-58db1.firebasestorage.app",
-            messagingSenderId: "668700911156",
-            appId: "1:668700911156:web:c7dde1466a104cf41d4c61"
-        };
+  apiKey: "AIzaSyCzsI9FW3bga1V73lCR7pNgfPLdcqcbsgM",
+  authDomain: "class-manager-bad00.firebaseapp.com",
+  databaseURL: "https://class-manager-bad00-default-rtdb.asia-southeast1.firebasedatabase.app",
+  projectId: "class-manager-bad00",
+  storageBucket: "class-manager-bad00.firebasestorage.app",
+  messagingSenderId: "436830301778",
+  appId: "1:436830301778:web:d3da11a5ac0e6c252d798b",
+  measurementId: "G-H95D2Z7MFF"
+};
+
 
         const app = initializeApp(firebaseConfig);
         const db = getDatabase(app);
@@ -110,7 +112,7 @@
         .btn-refund { padding: 6px 12px; border: 1px solid #CCC; background: white; border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: bold; transition: 0.2s; }
         .btn-refund:hover { background: #F5F5F5; }
         
-        /* 전체 환불 버튼 (이모지 제거) */
+        /* 전체 구입 버튼 (이모지 제거) */
         .btn-refund-all { background: #FFE3E3; color: #E03131; border: none; padding: 8px 18px; border-radius: 25px; font-weight: 900; cursor: pointer; font-size: 15px; box-shadow: 0 4px 0 #FFB8B8; transition: all 0.1s; display: flex; align-items: center; justify-content: center; }
         .btn-refund-all:active { transform: translateY(4px); box-shadow: none; }
 
@@ -180,6 +182,25 @@
     transform: translateY(4px); 
     box-shadow: none; 
 }
+/* 🎨 커스텀 확인 팝업창 스타일 */
+        .btn-confirm-yes {
+            background: #FFB366; color: white; border: none; padding: 15px 0; border-radius: 15px; 
+            font-family: 'Jua', sans-serif; font-size: 22px; cursor: pointer; box-shadow: 0 4px 0 #FF9F43; 
+            transition: 0.1s; flex: 1; font-weight: bold;
+        }
+        .btn-confirm-yes:active { transform: translateY(4px); box-shadow: none; }
+        
+        .btn-confirm-no {
+            background: #B0BEC5; color: white; border: none; padding: 15px 0; border-radius: 15px; 
+            font-family: 'Jua', sans-serif; font-size: 22px; cursor: pointer; box-shadow: 0 4px 0 #90A4AE; 
+            transition: 0.1s; flex: 1; font-weight: bold;
+        }
+        .btn-confirm-no:active { transform: translateY(4px); box-shadow: none; }
+        
+        @keyframes popUpAnim {
+            from { transform: scale(0.8); opacity: 0; }
+            to { transform: scale(1); opacity: 1; }
+        }
     </style>
 </head>
 <body>
@@ -187,11 +208,11 @@
     <div class="main-content">
       <header>
     <div class="title-area" onclick="openAdminSettings()">
-        🏪 꽃구름 상점
+        🖥️ 키오스크
     </div>
     
     <div class="title-area" onclick="window.open('https://csgo0404-ai.github.io/class-store/', '_blank')">
-        🍪
+        🏪
     </div>
 </header>
 
@@ -203,7 +224,7 @@
     <div class="sidebar">
         <div style="display:flex; justify-content:space-between; align-items:center; border-bottom: 2px solid #333; padding-bottom: 15px;">
             <h3 style="margin: 0; font-size: 20px; font-family: 'Jua', sans-serif;">🧾 구매 내역</h3>
-            <button class="btn-refund-all" onclick="refundAll()">전체 환불</button>
+            <button class="btn-refund-all" onclick="refundAll()">전체 완료</button>
         </div>
         <div class="history-list" id="historyList">
             </div>
@@ -215,13 +236,21 @@
                 <div class="buyer-name" id="modalStName">학생 이름</div>
                 <div style="font-size: 18px; color: #6D4C41; font-weight: 700; margin-top: 5px;">보유: <span id="modalStCandy" style="font-size: 24px; color: #E65100;">0</span> 🍪</div>
             </div>
+            
+            <div style="margin-bottom: 25px; padding-bottom: 20px; border-bottom: 2px dashed #EEE;">
+                <h3 style="margin: 0 0 10px 0; font-size: 18px; color: #1976D2;">🎒 내 가방</h3>
+                <div class="item-grid" id="modalInventoryGrid">
+                    </div>
+            </div>
+            
+            <h3 style="margin: 0 0 10px 0; font-size: 18px; color: #E65100;">🏪 키오스크 상점</h3>
             <div class="item-grid" id="modalItemGrid">
                 </div>
             <button class="btn-close" onclick="closeModal('purchaseModal')">닫기</button>
         </div>
     </div>
 
-   <div class="modal-overlay" id="adminModal" onclick="closeModal('adminModal')">
+  <div class="modal-overlay" id="adminModal" onclick="closeModal('adminModal')">
         <div class="admin-modal-content" onclick="event.stopPropagation()">
             <div class="admin-header">
                 <h2>🎪 상점 꾸미기</h2>
@@ -250,10 +279,20 @@
                 <div id="adminItemList" class="admin-menu-grid">
                     </div>
             </div>
-
-            </div>
+        </div>
     </div>
 
+    <div class="modal-overlay" id="customConfirmModal" style="z-index: 9999;">
+        <div style="background: #FFFDF9; border: 5px solid #FFE0B2; border-radius: 30px; width: 400px; max-width: 90%; padding: 30px; text-align: center; box-shadow: 0 15px 35px rgba(0,0,0,0.2); animation: popUpAnim 0.3s ease-out;">
+            <div id="confirmIcon" style="font-size: 80px; filter: drop-shadow(0 5px 10px rgba(0,0,0,0.1)); margin-bottom: 15px;">🎟️</div>
+            <h2 id="confirmTitle" style="font-family: 'Jua', sans-serif; font-size: 32px; color: #5D4037; margin: 0 0 15px 0;">사용하시겠습니까?</h2>
+            <div id="confirmDesc" style="font-family: 'Jua', sans-serif; font-size: 20px; color: #8D6E63; margin-bottom: 30px; line-height: 1.5;">설명</div>
+            <div style="display: flex; gap: 15px;">
+                <button class="btn-confirm-no" onclick="closeConfirmModal()">아니요</button>
+                <button class="btn-confirm-yes" id="confirmBtnYes">네, 쓸래요!</button>
+            </div>
+        </div>
+    </div>
     <script>
         const BASE_URL = "https://api.dahandin.com/openapi/v1/get/student/total";
         let API_KEY = localStorage.getItem('kiosk_api_key') || "";
@@ -261,6 +300,7 @@
         let usersData = {};
         let itemsData = {};
         let historyData = {};
+        let shopStudents = {}; // 이벤트 상점 데이터 저장용
         let currentBuyerCode = null;
 
         // Firebase 데이터 리스너
@@ -270,6 +310,7 @@
             window.dbOnValue(window.dbPath(window.db, 'kiosk_users'), (snap) => {
                 usersData = snap.val() || {};
                 renderStudents();
+                updateModalCookieUI();
             });
 
             window.dbOnValue(window.dbPath(window.db, 'kiosk_items'), (snap) => {
@@ -281,6 +322,17 @@
                 historyData = snap.val() || {};
                 renderHistory();
             });
+
+            // 🎒 이벤트 상점 데이터 전체를 실시간 감시
+            window.dbOnValue(window.dbPath(window.db, 'ClassData/EventShop/stu'), (snap) => {
+                shopStudents = snap.val() || {};
+                if(document.getElementById('purchaseModal').style.display === 'flex' && currentBuyerCode) {
+                    renderInventoryGrid(currentBuyerCode);
+                }
+            });
+
+            // 💡 [스마트 자동 동기화] 5초마다 다했니 쿠키를 조용히 최신화합니다 (가장 빠르고 안전한 주기)
+            setInterval(syncAllCookiesSilent, 5000);
         };
 
         // ==========================================
@@ -291,7 +343,7 @@
             const students = Object.values(usersData).sort((a, b) => parseInt(a.no) - parseInt(b.no));
             
             grid.innerHTML = students.map(st => {
-                const availableCookie = (st.cookie || 0) - (st.usedCookie || 0) - (st.spent || 0);
+                const availableCookie = (st.cookie || 0) + (st.bonus || 0) - (st.usedCookie || 0) - (st.spent || 0);
                 const level = Math.floor((st.cookie || 0) / 10);
                 
                 let highlightClass = "";
@@ -313,7 +365,7 @@
                     </div>
                     <div class="st-name">${st.name}</div>
                     ${amtBarHtml}
-                    <div class="st-candy">🍪 ${availableCookie} / ${st.cookie || 0}</div>
+                    <div class="st-candy">🍪 ${availableCookie} / ${(st.cookie || 0) + (st.bonus || 0)}</div>
                 </div>
                 `;
             }).join('');
@@ -321,7 +373,7 @@
 
         function renderHistory() {
             const list = document.getElementById('historyList');
-            const logs = Object.values(historyData).sort((a, b) => b.timestamp - a.timestamp);
+const logs = Object.values(historyData).sort((a, b) => a.timestamp - b.timestamp);
             
             list.innerHTML = logs.map(log => {
                 const isPlus = log.price < 0;
@@ -336,7 +388,7 @@
                     </div>
                     <div style="display:flex; align-items:center;">
                         <span class="h-price" style="color:${color}">${displayPrice}</span>
-                        <button class="btn-refund" onclick="refundItem('${log.id}', ${log.price}, '${log.code}')">환불</button>
+                        <button class="btn-refund" onclick="refundItem('${log.id}', ${log.price}, '${log.code}', '${log.itemName}')">완료</button>
                     </div>
                 </div>
                 `;
@@ -371,18 +423,47 @@
         }
 
         // ==========================================
-        // 구매 및 환불 로직
+        // 구매, 복권 및 사용 로직
         // ==========================================
+        
+        async function fetchSingleCookieSilent(code) {
+            if(!API_KEY) return;
+            try {
+                const res = await fetch(`${BASE_URL}?code=${code}`, { headers: { "X-API-Key": API_KEY } });
+                if (res.ok) {
+                    const data = (await res.json()).data || {};
+                    if(data.cookie !== undefined) {
+                        await window.dbUpdate(window.dbPath(window.db, `kiosk_users/${code}`), {
+                            cookie: data.cookie,
+                            usedCookie: data.usedCookie || 0
+                        });
+                    }
+                }
+            } catch(e) {}
+        }
+
+        function updateModalCookieUI() {
+            if(document.getElementById('purchaseModal').style.display !== 'flex' || !currentBuyerCode) return;
+            const st = usersData[currentBuyerCode];
+            if(st) {
+                const availableCookie = (st.cookie || 0) + (st.bonus || 0) - (st.usedCookie || 0) - (st.spent || 0);
+                document.getElementById('modalStCandy').innerText = availableCookie;
+            }
+        }
+
         function openPurchaseModal(code) {
             const st = usersData[code];
             if(!st) return;
             
             currentBuyerCode = code;
-            const availableCookie = (st.cookie || 0) - (st.usedCookie || 0) - (st.spent || 0);
-            
-            document.getElementById('modalStName').innerText = st.name;
-            document.getElementById('modalStCandy').innerText = availableCookie;
+            fetchSingleCookieSilent(code); // 학생 클릭 시 즉각 최신화 요청
 
+            document.getElementById('modalStName').innerText = st.name;
+            updateModalCookieUI();
+
+            renderInventoryGrid(code); // 상점 가방 연동 렌더링
+
+            // 키오스크 메뉴 렌더링
             const itemGrid = document.getElementById('modalItemGrid');
             const items = Object.values(itemsData);
             
@@ -406,52 +487,187 @@
             document.getElementById('purchaseModal').style.display = 'flex';
         }
 
+        function renderInventoryGrid(code) {
+            const invGrid = document.getElementById('modalInventoryGrid');
+            let shopUserKey = null;
+            let myInv = null;
+            
+            // 키오스크 코드(code)와 이벤트 상점 코드(cd)가 완벽히 일치하는지 검색
+            for (let key in shopStudents) {
+                let st = shopStudents[key];
+                if (st && st.cd && String(st.cd).trim() === String(code).trim()) {
+                    shopUserKey = key;
+                    myInv = st.inv || [];
+                    break;
+                }
+            }
+
+            if(shopUserKey === null) {
+                // 상점의 학생 코드와 키오스크의 코드가 다를 경우 뜨는 에러 메시지
+                invGrid.innerHTML = `<div style="grid-column: span 3; color:#E53935; text-align:center; font-weight:bold;">⚠️ 상점에 동일한 학생 코드(${code})가 없습니다. 상점을 확인해주세요!</div>`;
+                return;
+            }
+
+            if(!myInv || Object.keys(myInv).length === 0) {
+                invGrid.innerHTML = `<div style="grid-column: span 3; color:#999; text-align:center;">가방이 비어있습니다.</div>`;
+                return;
+            }
+
+            let invHtml = '';
+            let activeItemCount = 0;
+
+            Object.keys(myInv).forEach(idx => {
+                const item = myInv[idx];
+                if(item && item.st === 'active') {
+                    activeItemCount++;
+                    if(item.n.includes('복권')) {
+                        invHtml += `
+                        <div class="item-card" style="border-color:#42A5F5; background:#E3F2FD;" onclick="useLottery('${shopUserKey}', '${idx}')">
+                            <div class="item-icon">${item.i || '🎟️'}</div>
+                            <div class="item-name">${item.n}</div>
+                        </div>`;
+                    } else {
+                        invHtml += `
+                        <div class="item-card" style="opacity:0.5; cursor:default; background:#F5F5F5;">
+                            <div class="item-icon">${item.i}</div>
+                            <div class="item-name">${item.n}</div>
+                            <div class="item-price" style="color:#999; font-size:12px;">상점 전용 아이템</div>
+                        </div>`;
+                    }
+                }
+            });
+
+            if (activeItemCount === 0) {
+                invGrid.innerHTML = `<div style="grid-column: span 3; color:#999; text-align:center;">사용 가능한 아이템이 없습니다.</div>`;
+            } else {
+                invGrid.innerHTML = invHtml;
+            }
+        }
+// ==========================================
+        // 예쁜 확인 팝업창 제어 로직
+        // ==========================================
+        let confirmAction = null;
+
+        function showConfirmModal(icon, title, desc, onConfirm) {
+            document.getElementById('confirmIcon').innerHTML = icon;
+            document.getElementById('confirmTitle').innerText = title;
+            document.getElementById('confirmDesc').innerHTML = desc;
+            confirmAction = onConfirm;
+            document.getElementById('customConfirmModal').style.display = 'flex';
+        }
+
+        function closeConfirmModal() {
+            document.getElementById('customConfirmModal').style.display = 'none';
+            confirmAction = null;
+        }
+
+        document.getElementById('confirmBtnYes').onclick = () => {
+            if (confirmAction) confirmAction();
+            closeConfirmModal();
+        };
+        // 🎟️ 복권 사용 로직 (기존 함수 덮어쓰기)
+        async function useLottery(shopUserKey, itemIdx) {
+            const st = usersData[currentBuyerCode];
+            const item = shopStudents[shopUserKey].inv[itemIdx];
+            const itemName = item.n; 
+
+            const match = itemName.match(/\d+/);
+            const result = match ? parseInt(match[0]) : 0;
+
+            // 기본 confirm 대신 예쁜 팝업 띄우기
+            showConfirmModal(
+                item.i || '🎟️',
+                "복권을 사용하시겠습니까?",
+                `<span style="color:#FF6F00; font-size:26px;">[${itemName}]</span><br>사용 시 <b style="color:#4CAF50;">+${result} 쿠키</b> 획득!`,
+                async () => {
+                    const logId = Date.now().toString();
+                    const newBonus = (st.bonus || 0) + result;
+                    const newHighlight = (st.highlight || 0) - result; 
+
+                    const updates = {};
+                    updates[`kiosk_users/${currentBuyerCode}/bonus`] = newBonus;
+                    updates[`kiosk_users/${currentBuyerCode}/highlight`] = newHighlight;
+                    updates[`kiosk_history/${logId}`] = {
+                        id: logId, code: currentBuyerCode, studentName: st.name,
+                        itemName: `${itemName} 사용`, price: -result, timestamp: Date.now()
+                    };
+                    updates[`ClassData/EventShop/stu/${shopUserKey}/inv/${itemIdx}/st`] = 'used';
+
+                    try {
+                        await window.dbUpdate(window.dbPath(window.db), updates);
+                        alert(`🎉 축하합니다!\n${result} 🍪를 획득했습니다!`);
+                    } catch(e) {
+                        alert("처리 중 오류가 발생했습니다.");
+                    }
+                }
+            );
+        }
+
+       // 🛒 키오스크 일반 메뉴 결제 로직 (기존 함수 덮어쓰기)
         async function executePurchase(itemId, itemName, priceValue) {
             const st = usersData[currentBuyerCode];
-            const availableCookie = (st.cookie || 0) - (st.usedCookie || 0) - (st.spent || 0);
+            const availableCookie = (st.cookie || 0) + (st.bonus || 0) - (st.usedCookie || 0) - (st.spent || 0);
 
             if(priceValue > 0 && availableCookie < priceValue) {
                 alert("🍪 쿠키가 부족해요!");
                 return;
             }
 
+            // 아이템 이모지 찾기
+            const itemInfo = Object.values(itemsData).find(i => i.id === itemId) || {};
+            const icon = itemInfo.icon || '🛍️';
             const displayAmt = priceValue > 0 ? `-${priceValue}` : `+${Math.abs(priceValue)}`;
-            if(confirm(`[${itemName}] 메뉴를 적용할까요?\n(${displayAmt} 쿠키)`)) {
-                const logId = Date.now().toString();
-                const newSpent = (st.spent || 0) + parseInt(priceValue);
-                const newHighlight = (st.highlight || 0) + parseInt(priceValue);
+            const color = priceValue > 0 ? '#E53935' : '#4CAF50';
 
-                const updates = {};
-                updates[`kiosk_users/${currentBuyerCode}/spent`] = newSpent;
-                updates[`kiosk_users/${currentBuyerCode}/highlight`] = newHighlight;
-                updates[`kiosk_history/${logId}`] = {
-                    id: logId, code: currentBuyerCode, studentName: st.name,
-                    itemName: itemName, price: parseInt(priceValue), timestamp: Date.now()
-                };
+            // 기본 confirm 대신 예쁜 팝업 띄우기
+            showConfirmModal(
+                icon,
+                "메뉴를 주문하시겠습니까?",
+                `<span style="color:#FF6F00; font-size:26px;">[${itemName}]</span><br>결제: <b style="color:${color};">${displayAmt} 쿠키</b>`,
+                async () => {
+                    const logId = Date.now().toString();
+                    const newSpent = (st.spent || 0) + parseInt(priceValue);
+                    const newHighlight = (st.highlight || 0) + parseInt(priceValue);
 
-                try {
-                    await window.dbUpdate(window.dbPath(window.db), updates);
-                    closeModal('purchaseModal');
-                } catch(e) { alert("처리 중 오류가 발생했습니다."); }
-            }
+                    const updates = {};
+                    updates[`kiosk_users/${currentBuyerCode}/spent`] = newSpent;
+                    updates[`kiosk_users/${currentBuyerCode}/highlight`] = newHighlight;
+                    updates[`kiosk_history/${logId}`] = {
+                        id: logId, code: currentBuyerCode, studentName: st.name,
+                        itemName: itemName, price: parseInt(priceValue), timestamp: Date.now()
+                    };
+
+                    try {
+                        await window.dbUpdate(window.dbPath(window.db), updates);
+                        closeModal('purchaseModal');
+                    } catch(e) { alert("처리 중 오류가 발생했습니다."); }
+                }
+            );
         }
 
-        async function refundItem(logId, priceValue, code) {
-            if(!confirm("이 내역을 환불 처리하시겠습니까?")) return;
+        async function refundItem(logId, priceValue, code, itemName) {
+            if(!confirm("이 내역을 사용 처리하시겠습니까?")) return;
 
             const st = usersData[code];
             const updates = {};
             updates[`kiosk_history/${logId}`] = null; 
             
             if(st) {
-                const newSpent = (st.spent || 0) - parseInt(priceValue);
-                const newHighlight = (st.highlight || 0) - parseInt(priceValue);
-                updates[`kiosk_users/${code}/spent`] = newSpent;
-                updates[`kiosk_users/${code}/highlight`] = newHighlight === 0 ? null : newHighlight;
+                if (itemName && itemName.includes('복권 당첨')) {
+                    const newBonus = (st.bonus || 0) - Math.abs(priceValue);
+                    const newHighlight = (st.highlight || 0) + Math.abs(priceValue);
+                    updates[`kiosk_users/${code}/bonus`] = newBonus;
+                    updates[`kiosk_users/${code}/highlight`] = newHighlight === 0 ? null : newHighlight;
+                } else {
+                    const newSpent = (st.spent || 0) - parseInt(priceValue);
+                    const newHighlight = (st.highlight || 0) - parseInt(priceValue);
+                    updates[`kiosk_users/${code}/spent`] = newSpent;
+                    updates[`kiosk_users/${code}/highlight`] = newHighlight === 0 ? null : newHighlight;
+                }
             }
 
             try { await window.dbUpdate(window.dbPath(window.db), updates); } 
-            catch(e) { alert("환불 처리 실패"); }
+            catch(e) { alert("사용 처리 실패"); }
         }
 
         async function refundAll() {
@@ -459,8 +675,9 @@
             
             const updates = {};
             for(let code in usersData) {
-                if(usersData[code].spent || usersData[code].highlight) {
+                if(usersData[code].spent || usersData[code].highlight || usersData[code].bonus) {
                     updates[`kiosk_users/${code}/spent`] = 0;
+                    updates[`kiosk_users/${code}/bonus`] = 0;
                     updates[`kiosk_users/${code}/highlight`] = null;
                 }
             }
@@ -468,17 +685,14 @@
             
             try {
                 await window.dbUpdate(window.dbPath(window.db), updates);
-                alert("전체 환불 및 내역 초기화 완료!");
+                alert("전체 구입 내역 초기화 완료!");
             } catch(e) { alert("초기화 실패"); }
         }
 
         // ==========================================
-        // 관리자 설정 로직
+        // 관리자 설정 및 다했니 API 연동
         // ==========================================
-        function openAdminSettings() {
-            document.getElementById('adminModal').style.display = 'flex';
-        }
-
+        function openAdminSettings() { document.getElementById('adminModal').style.display = 'flex'; }
         function closeModal(id) { document.getElementById(id).style.display = 'none'; }
 
         function saveApiKey() {
@@ -486,6 +700,7 @@
             localStorage.setItem('kiosk_api_key', key);
             API_KEY = key;
             alert("API Key 저장 완료!");
+            syncAllCookiesSilent(); // 키 저장 후 바로 동기화 시도
         }
 
         async function bulkRegister() {
@@ -512,6 +727,7 @@
                             cookie: data.cookie || 0, 
                             usedCookie: data.usedCookie || 0,
                             spent: existing.spent || 0,
+                            bonus: existing.bonus || 0,
                             highlight: existing.highlight || null
                         };
                     } catch(e) { console.error(`${name} 조회 실패`, e); }
@@ -525,29 +741,36 @@
             }
         }
 
-        async function syncAllCookies() {
-            if(!API_KEY) return alert("API Key가 필요합니다.");
+        async function syncAllCookiesSilent() {
+            if(!API_KEY) return;
             const codes = Object.keys(usersData);
-            if(codes.length === 0) return alert("등록된 학생이 없습니다.");
+            if (codes.length === 0) return;
             
-            alert("데이터를 최신화합니다. 잠시만 기다려주세요...");
             let updates = {};
-            
             for(let code of codes) {
                 try {
                     const res = await fetch(`${BASE_URL}?code=${code}`, { headers: { "X-API-Key": API_KEY } });
-                    const data = (await res.json()).data || {};
-                    if(data.cookie !== undefined) {
-                        updates[`kiosk_users/${code}/cookie`] = data.cookie;
-                        updates[`kiosk_users/${code}/usedCookie`] = data.usedCookie || 0;
+                    if (res.ok) {
+                        const data = (await res.json()).data || {};
+                        if(data.cookie !== undefined) {
+                            updates[`kiosk_users/${code}/cookie`] = data.cookie;
+                            updates[`kiosk_users/${code}/usedCookie`] = data.usedCookie || 0;
+                        }
                     }
-                } catch(e) { console.error(e); }
+                } catch(e) {}
             }
-
             if(Object.keys(updates).length > 0) {
                 await window.dbUpdate(window.dbPath(window.db), updates);
-                alert("동기화가 완료되었습니다.");
             }
+        }
+
+        async function syncAllCookies() {
+            if(!API_KEY) return alert("API Key가 필요합니다.");
+            if(Object.keys(usersData).length === 0) return alert("등록된 학생이 없습니다.");
+            
+            alert("데이터를 최신화합니다. 잠시만 기다려주세요...");
+            await syncAllCookiesSilent();
+            alert("동기화가 완료되었습니다.");
         }
 
         async function resetStudents() {

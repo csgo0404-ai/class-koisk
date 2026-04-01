@@ -329,10 +329,10 @@
     <div class="sidebar">
         <div style="display:flex; justify-content:space-between; align-items:center; border-bottom: 2px solid #333; padding-bottom: 15px;">
             <h3 style="margin: 0; font-size: 20px; font-family: 'Jua', sans-serif;">🧾 구매 내역</h3>
-            <button class="btn-refund-all" onclick="refundAll()">전체 완료</button>
+            <button class="btn-refund-all" onclick="refundAll(false)" oncontextmenu="refundAll(true); return false;">전체 완료</button>
         </div>
         <div class="history-list" id="historyList">
-            </div>
+        </div>
     </div>
 
     <div class="modal-overlay" id="purchaseModal">
@@ -372,16 +372,13 @@
 
 <div class="admin-section">
                 <h3>🔒 비밀번호 설정 <span style="font-size:13px; color:#888; font-weight:normal; margin-left: 10px;">기본값: 0404</span></h3>
-                <div style="display: flex; gap: 10px; align-items: center; margin-bottom: 10px;">
+                <div style="display: flex; gap: 10px; align-items: center;">
                     <span style="width: 120px; font-weight: bold; color: #5D4037;">교사 비밀번호:</span>
                     <input type="text" id="configAdminPw" placeholder="교사 비밀번호" style="flex:1; margin:0; min-width: 0;">
-                </div>
-                <div style="display: flex; gap: 10px; align-items: center;">
-                    <span style="width: 120px; font-weight: bold; color: #5D4037;">매니저 비밀번호:</span>
-                    <input type="text" id="configRefundPw" placeholder="매니저 비밀번호" style="flex:1; margin:0; min-width: 0;">
                     <button class="btn-admin" onclick="savePasswords()">저장</button>
                 </div>
             </div>
+
             <div class="admin-section">
                 <h3>👥 학생 명단 관리</h3>
                 <textarea id="bulkInput" rows="3" placeholder="예: 1 홍길동 1001 (번호 이름 코드 순)" style="margin-bottom:10px;"></textarea>
@@ -426,7 +423,6 @@
         
         let API_KEY = "";
         let ADMIN_PW = "0404";
-        let REFUND_PW = "0404";
         
         let usersData = {};
         let itemsData = {};
@@ -501,7 +497,6 @@
                 
                 let highlightClass = "";
                 let amtBarHtml = "";
-                
                 if(st.highlight && st.highlight !== 0) {
                     highlightClass = "highlighted-card";
                     const isPlus = st.highlight < 0; 
@@ -511,7 +506,7 @@
                 }
 
                 return `
-                <div class="student-card ${highlightClass}" onclick="openPurchaseModal('${st.code}')">
+                <div class="student-card ${highlightClass}" onclick="checkStudentCodeAndOpen('${st.code}', '${st.name}')">
                     <div class="lv-badge">
                         <span class="lv-text">Lv</span>
                         <span class="lv-num">${level}</span>
@@ -526,7 +521,7 @@
 
         function renderHistory() {
             const list = document.getElementById('historyList');
-const logs = Object.values(historyData).sort((a, b) => a.timestamp - b.timestamp);
+            const logs = Object.values(historyData).sort((a, b) => a.timestamp - b.timestamp);
             
             list.innerHTML = logs.map(log => {
                 const isPlus = log.price < 0;
@@ -541,38 +536,11 @@ const logs = Object.values(historyData).sort((a, b) => a.timestamp - b.timestamp
                     </div>
                     <div style="display:flex; align-items:center;">
                         <span class="h-price" style="color:${color}">${displayPrice}</span>
-                        <button class="btn-refund" onclick="refundItem('${log.id}', ${log.price}, '${log.code}', '${log.itemName}')">완료</button>
+                        <button class="btn-refund" onclick="refundItem('${log.id}', ${log.price}, '${log.code}', '${log.itemName}', false)" oncontextmenu="refundItem('${log.id}', ${log.price}, '${log.code}', '${log.itemName}', true); return false;">완료</button>
                     </div>
                 </div>
                 `;
             }).join('');
-        }
-
-        function renderAdminItems() {
-            const list = document.getElementById('adminItemList');
-            const items = Object.values(itemsData);
-            
-            let html = items.map(item => {
-                const isPlus = item.priceLabel && String(item.priceLabel).includes('+');
-                const plusClass = isPlus ? 'is-plus' : '';
-                
-                return `
-                <div class="admin-menu-card">
-                    <div class="delete-badge" onclick="deleteItem('${item.id}')">X</div>
-                    <div class="check-icon">✔</div>
-                    <input type="text" class="edit-icon" value="${item.icon}" onchange="updateItemField('${item.id}', 'icon', this.value)">
-                    <input type="text" class="edit-name" value="${item.name}" onchange="updateItemField('${item.id}', 'name', this.value)">
-                    <input type="text" class="edit-price ${plusClass}" value="${item.priceLabel}" onchange="updateItemPrice('${item.id}', this.value)">
-                </div>
-                `;
-            }).join('');
-            
-            html += `
-            <div class="admin-menu-card add-card" onclick="addInlineEmptyItem()">
-                <div style="font-size: 50px; color: #BCAAA4;">+</div>
-            </div>
-            `;
-            list.innerHTML = html;
         }
 
         // ==========================================
@@ -840,14 +808,26 @@ const logs = Object.values(historyData).sort((a, b) => a.timestamp - b.timestamp
             if(tempCallback) tempCallback(pw); // 💡 백업해둔 작업을 실행합니다!
         }
 
+       // ==========================================
+        // 🔒 학생 코드 & 교사 비밀번호 검사 및 환불 로직
         // ==========================================
-        // 기존 비밀번호 로직을 커스텀 모달로 교체
-        // ==========================================
+        
+        // 💡 학생이 자기 카드를 눌렀을 때 코드 확인
+        function checkStudentCodeAndOpen(code, name) {
+            showPasswordModal(`<b style='color:#1976D2'>${name}</b> 학생의 코드를 입력하세요.`, (inputCode) => {
+                if (String(inputCode).trim() === String(code).trim()) {
+                    openPurchaseModal(code);
+                } else {
+                    alert("학생 코드가 일치하지 않습니다!");
+                }
+            });
+        }
+
+        // 💡 톱니바퀴 설정창 진입
         function checkAdminPasswordAndOpen() {
             showPasswordModal("관리자 설정 창에 진입합니다.<br><b style='color:#E65100'>교사 비밀번호</b>를 입력하세요.", (pw) => {
                 const inputPw = String(pw).trim();
-                const targetPw = String(ADMIN_PW).trim(); // 💡 교사 비밀번호만 허용
-                
+                const targetPw = String(ADMIN_PW).trim(); 
                 if (inputPw === targetPw || (targetPw === "404" && inputPw === "0404") || (targetPw === "0404" && inputPw === "404")) {
                     openAdminSettings();
                 } else {
@@ -856,44 +836,17 @@ const logs = Object.values(historyData).sort((a, b) => a.timestamp - b.timestamp
             });
         }
 
-        function refundAll() {
-            showPasswordModal("⚠️ 모든 구매 내역을 삭제합니다.<br><b style='color:#E65100'>교사 비밀번호</b>를 입력하세요.", async (pw) => {
+        // 💡 개별 완료 (좌/우 클릭 판별 추가)
+        function refundItem(logId, priceValue, code, itemName, isRightClick) {
+            const msg = isRightClick 
+                ? "<b style='color:#D32F2F'>환불</b>합니다.<br><b style='color:#E65100'>교사 비밀번호</b>를 입력하세요."
+                : " 사용 처리합니다. <span style='font-size:14px'></span><br><b style='color:#E65100'>교사 비밀번호</b>를 입력하세요.";
+
+            showPasswordModal(msg, async (pw) => {
                 const inputPw = String(pw).trim();
-                const targetPw = String(ADMIN_PW).trim(); // 💡 전체 완료도 교사 비밀번호만 허용
+                const targetPw = String(ADMIN_PW).trim();
 
                 if(inputPw !== targetPw && !(targetPw === "404" && inputPw === "0404") && !(targetPw === "0404" && inputPw === "404")) {
-                    alert("권한이 없거나 비밀번호가 틀렸습니다.");
-                    return;
-                }
-                
-                const updates = {};
-                for(let code in usersData) {
-                    if(usersData[code].spent || usersData[code].highlight || usersData[code].bonus) {
-                        updates[`kiosk_users/${code}/spent`] = 0;
-                        updates[`kiosk_users/${code}/bonus`] = 0;
-                        updates[`kiosk_users/${code}/highlight`] = null;
-                    }
-                }
-                updates[`kiosk_history`] = null;
-                
-                try {
-                    await window.dbUpdate(window.dbPath(window.db), updates);
-                    alert("전체 구입 내역 초기화 완료!");
-                } catch(e) { alert("초기화 실패"); }
-            });
-        }
-
-        function refundItem(logId, priceValue, code, itemName) {
-            showPasswordModal("이 내역을 완료 처리하시겠습니까?<br><span style='font-size:16px; color:#757575'>(매니저 비밀번호)</span>", async (pw) => {
-                const inputPw = String(pw).trim();
-                const targetAdmin = String(ADMIN_PW).trim();
-                const targetRefund = String(REFUND_PW).trim();
-
-                // 💡 개별 완료는 교사(Admin) 또는 매니저(Refund) 비밀번호 중 하나만 맞아도 통과
-                const isAdminMatch = inputPw === targetAdmin || (targetAdmin === "404" && inputPw === "0404") || (targetAdmin === "0404" && inputPw === "404");
-                const isRefundMatch = inputPw === targetRefund || (targetRefund === "404" && inputPw === "0404") || (targetRefund === "0404" && inputPw === "404");
-
-                if(!isAdminMatch && !isRefundMatch) {
                     alert("비밀번호가 일치하지 않습니다.");
                     return;
                 }
@@ -909,19 +862,22 @@ const logs = Object.values(historyData).sort((a, b) => a.timestamp - b.timestamp
                         updates[`kiosk_users/${code}/bonus`] = newBonus;
                         updates[`kiosk_users/${code}/highlight`] = newHighlight === 0 ? null : newHighlight;
 
-                        const originalItemName = itemName.replace(' 사용', '').trim();
-                        let shopUserKey = null;
-                        for (let key in shopStudents) {
-                            if (String(shopStudents[key].cd).trim() === String(code).trim()) {
-                                shopUserKey = key; break;
+                        // 우클릭(true)인 경우에만 아이템을 가방(active)으로 되돌림
+                        if (isRightClick) {
+                            const originalItemName = itemName.replace(' 사용', '').trim();
+                            let shopUserKey = null;
+                            for (let key in shopStudents) {
+                                if (String(shopStudents[key].cd).trim() === String(code).trim()) {
+                                    shopUserKey = key; break;
+                                }
                             }
-                        }
-                        if (shopUserKey && shopStudents[shopUserKey].inv) {
-                            const inv = shopStudents[shopUserKey].inv;
-                            for (let idx = inv.length - 1; idx >= 0; idx--) {
-                                if (inv[idx].n === originalItemName && inv[idx].st === 'used') {
-                                    updates[`ClassData/EventShop/stu/${shopUserKey}/inv/${idx}/st`] = 'active';
-                                    break; 
+                            if (shopUserKey && shopStudents[shopUserKey].inv) {
+                                const inv = shopStudents[shopUserKey].inv;
+                                for (let idx = inv.length - 1; idx >= 0; idx--) {
+                                    if (inv[idx].n === originalItemName && inv[idx].st === 'used') {
+                                        updates[`ClassData/EventShop/stu/${shopUserKey}/inv/${idx}/st`] = 'active';
+                                        break; 
+                                    }
                                 }
                             }
                         }
@@ -935,8 +891,81 @@ const logs = Object.values(historyData).sort((a, b) => a.timestamp - b.timestamp
 
                 try { 
                     await window.dbUpdate(window.dbPath(window.db), updates); 
-                } catch(e) { alert("사용 처리 실패"); }
+                } catch(e) { alert("처리 실패"); }
             });
+        }
+
+        // 💡 전체 완료 (좌/우 클릭 판별 추가)
+        function refundAll(isRightClick) {
+            const msg = isRightClick 
+                ? "⚠️ 전체 <b style='color:#D32F2F'>환불</b>합니다.<br><b style='color:#E65100'>교사 비밀번호</b>를 입력하세요."
+                : "⚠️ 전체 사용 처리<br><b style='color:#E65100'>교사 비밀번호</b>를 입력하세요.";
+
+            showPasswordModal(msg, async (pw) => {
+                const inputPw = String(pw).trim();
+                const targetPw = String(ADMIN_PW).trim();
+
+                if(inputPw !== targetPw && !(targetPw === "404" && inputPw === "0404") && !(targetPw === "0404" && inputPw === "404")) {
+                    alert("비밀번호가 일치하지 않습니다.");
+                    return;
+                }
+                
+                const updates = {};
+                
+                // 우클릭(true)인 경우, 현재 히스토리에 있는 모든 '사용' 아이템을 찾아 복구
+                if (isRightClick && historyData) {
+                    for(let logId in historyData) {
+                        const log = historyData[logId];
+                        if(log.itemName && log.itemName.includes('사용')) {
+                            const originalItemName = log.itemName.replace(' 사용', '').trim();
+                            let shopUserKey = null;
+                            for (let key in shopStudents) {
+                                if (String(shopStudents[key].cd).trim() === String(log.code).trim()) {
+                                    shopUserKey = key; break;
+                                }
+                            }
+                            if (shopUserKey && shopStudents[shopUserKey].inv) {
+                                const inv = shopStudents[shopUserKey].inv;
+                                for (let idx = inv.length - 1; idx >= 0; idx--) {
+                                    if (inv[idx].n === originalItemName && inv[idx].st === 'used') {
+                                        updates[`ClassData/EventShop/stu/${shopUserKey}/inv/${idx}/st`] = 'active';
+                                        inv[idx].st = 'active'; // 중복 방지를 위한 임시 적용
+                                        break; 
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                for(let code in usersData) {
+                    if(usersData[code].spent || usersData[code].highlight || usersData[code].bonus) {
+                        updates[`kiosk_users/${code}/spent`] = 0;
+                        updates[`kiosk_users/${code}/bonus`] = 0;
+                        updates[`kiosk_users/${code}/highlight`] = null;
+                    }
+                }
+                updates[`kiosk_history`] = null;
+                
+                try {
+                    await window.dbUpdate(window.dbPath(window.db), updates);
+                    alert("전체 내역 처리 완료!");
+                } catch(e) { alert("초기화 실패"); }
+            });
+        }
+
+        // 💡 비밀번호 저장 함수 (Firebase 연동, 매니저 PW 삭제)
+        async function savePasswords() {
+            const aPw = document.getElementById('configAdminPw').value.trim();
+            if(!aPw) return alert("비밀번호를 공백으로 둘 수 없습니다.");
+            
+            ADMIN_PW = aPw;
+            try {
+                await window.dbUpdate(window.dbPath(window.db, 'kiosk_config'), { admin_pw: aPw });
+                alert("비밀번호 저장 완료!");
+            } catch(e) {
+                alert("비밀번호 저장에 실패했습니다.");
+            }
         }
                function openAdminSettings() { document.getElementById('adminModal').style.display = 'flex'; }
         function closeModal(id) { document.getElementById(id).style.display = 'none'; }

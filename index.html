@@ -51,7 +51,10 @@
         header { display: flex; justify-content: space-between; align-items: center; padding-bottom: 20px; border-bottom: 2px solid #EEE; margin-bottom: 20px; }
         .title-area { display: flex; align-items: center; gap: 10px; font-size: 26px; font-weight: 900; cursor: pointer; transition: 0.2s; padding: 8px 15px; border-radius: 15px; }
         .title-area:hover { background: #FFF3E0; color: #E65100; } 
-
+        
+        /* 💡 톱니바퀴 전용 스타일: 크기를 키우고 마우스 호버 효과(배경색 변화)를 없앴습니다 */
+        .setting-area { display: flex; align-items: center; justify-content: center; font-size: 28px; cursor: pointer; transition: 0.1s; padding: 0 10px; }
+        .setting-area:active { transform: scale(0.9); }
         /* 학생 카드 */
         .student-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 18px; padding-top: 15px; }
         .student-card { 
@@ -300,14 +303,14 @@
 
     <div class="main-content">
       <header>
-    <div class="title-area" onclick="openAdminSettings()">
-        🖥️ 키오스크
-    </div>
-    
-    <div class="title-area" onclick="window.open('https://csgo0404-ai.github.io/class-store/', '_blank')">
-        🏪
-    </div>
-</header>
+        <div class="title-area" onclick="window.open('https://csgo0404-ai.github.io/class-store/', '_blank')">
+            🖥️ 키오스크
+        </div>
+        
+        <div class="setting-area" onclick="checkAdminPasswordAndOpen()">
+            ⚙️
+        </div>
+    </header>
 
 
         <div class="student-grid" id="studentGrid">
@@ -367,6 +370,18 @@
                 </div>
             </div>
 
+<div class="admin-section">
+                <h3>🔒 비밀번호 설정 <span style="font-size:13px; color:#888; font-weight:normal; margin-left: 10px;">기본값: 0404</span></h3>
+                <div style="display: flex; gap: 10px; align-items: center; margin-bottom: 10px;">
+                    <span style="width: 120px; font-weight: bold; color: #5D4037;">교사 비밀번호:</span>
+                    <input type="text" id="configAdminPw" placeholder="교사 비밀번호" style="flex:1; margin:0; min-width: 0;">
+                </div>
+                <div style="display: flex; gap: 10px; align-items: center;">
+                    <span style="width: 120px; font-weight: bold; color: #5D4037;">매니저 비밀번호:</span>
+                    <input type="text" id="configRefundPw" placeholder="매니저 비밀번호" style="flex:1; margin:0; min-width: 0;">
+                    <button class="btn-admin" onclick="savePasswords()">저장</button>
+                </div>
+            </div>
             <div class="admin-section">
                 <h3>👥 학생 명단 관리</h3>
                 <textarea id="bulkInput" rows="3" placeholder="예: 1 홍길동 1001 (번호 이름 코드 순)" style="margin-bottom:10px;"></textarea>
@@ -395,21 +410,47 @@
             </div>
         </div>
     </div>
+<div class="modal-overlay" id="passwordModal" style="z-index: 10000;">
+        <div style="background: #FFFDF9; border: 5px solid #FFE0B2; border-radius: 30px; width: 350px; max-width: 90%; padding: 30px; text-align: center; box-shadow: 0 15px 35px rgba(0,0,0,0.2); animation: popUpAnim 0.3s ease-out;">
+            <div style="font-size: 60px; margin-bottom: 10px;">🔒</div>
+            <h2 id="pwModalMsg" style="font-family: 'Jua', sans-serif; font-size: 20px; color: #5D4037; margin: 0 0 20px 0; line-height: 1.4; word-break: keep-all;">비밀번호 입력</h2>
+            <input type="password" id="pwModalInput" style="text-align:center; font-size:30px; letter-spacing: 10px; margin-bottom: 20px; width: 100%; border: 2px solid #EEE; border-radius: 12px; padding: 10px; font-family: sans-serif;" placeholder="****" onkeyup="if(event.key==='Enter') submitPasswordModal()">
+            <div style="display: flex; gap: 10px;">
+                <button class="btn-confirm-no" onclick="closePasswordModal()">취소</button>
+                <button class="btn-confirm-yes" onclick="submitPasswordModal()">확인</button>
+            </div>
+        </div>
+    </div>
     <script>
         const BASE_URL = "https://api.dahandin.com/openapi/v1/get/student/total";
-        let API_KEY = localStorage.getItem('kiosk_api_key') || "";
+        
+        let API_KEY = "";
+        let ADMIN_PW = "0404";
+        let REFUND_PW = "0404";
         
         let usersData = {};
         let itemsData = {};
         let historyData = {};
-        let shopStudents = {}; // 이벤트 상점 데이터 저장용
+        let shopStudents = {}; 
         let currentBuyerCode = null;
 
-        // Firebase 데이터 리스너
-        window.onload = () => {
-            document.getElementById('configApiKey').value = API_KEY;
 
-            // 🧑‍🎓 1. 학생 명단 불러오기 (이 부분이 지워져서 안 떴습니다!)
+        // Firebase 데이터 리스너
+       window.onload = () => {
+            // 💡 1. 설정값(API 키, 비밀번호)을 Firebase에서 실시간으로 불러오기
+            window.dbOnValue(window.dbPath(window.db, 'kiosk_config'), (snap) => {
+                const config = snap.val() || {};
+                API_KEY = config.api_key || "";
+                ADMIN_PW = config.admin_pw || "0404";
+                REFUND_PW = config.refund_pw || "0404";
+
+                // 불러온 값을 설정창 입력칸에 채워 넣기
+                if(document.getElementById('configApiKey')) document.getElementById('configApiKey').value = API_KEY;
+                if(document.getElementById('configAdminPw')) document.getElementById('configAdminPw').value = ADMIN_PW;
+                if(document.getElementById('configRefundPw')) document.getElementById('configRefundPw').value = REFUND_PW;
+            });
+
+            // 🧑‍🎓 2. 학생 명단 불러오기
             window.dbOnValue(window.dbPath(window.db, 'kiosk_users'), (snap) => {
                 usersData = snap.val() || {};
                 renderStudents();
@@ -721,7 +762,13 @@ const logs = Object.values(historyData).sort((a, b) => a.timestamp - b.timestamp
         }
 
         async function refundItem(logId, priceValue, code, itemName) {
-            if(!confirm("이 내역을 취소(환불) 처리하시겠습니까?\n(가방 아이템인 경우 가방으로 다시 복구됩니다)")) return;
+            const pw = prompt("이 내역을 완료(취소) 처리하시겠습니까?\n완료(관리자) 비밀번호를 입력하세요.");
+            
+            if(pw === null) return; 
+            if(pw !== REFUND_PW && !(REFUND_PW === "0404" && pw === "404")) {
+                alert("비밀번호가 일치하지 않습니다.");
+                return;
+            }
 
             const st = usersData[code];
             const updates = {};
@@ -768,39 +815,169 @@ const logs = Object.values(historyData).sort((a, b) => a.timestamp - b.timestamp
             } catch(e) { alert("사용 처리 실패"); }
         }
 
-        async function refundAll() {
-            if(!confirm("⚠️ 모든 구매 내역을 삭제하고 학생들의 쿠키를 원래대로 되돌리시겠습니까?")) return;
-            
-            const updates = {};
-            for(let code in usersData) {
-                if(usersData[code].spent || usersData[code].highlight || usersData[code].bonus) {
-                    updates[`kiosk_users/${code}/spent`] = 0;
-                    updates[`kiosk_users/${code}/bonus`] = 0;
-                    updates[`kiosk_users/${code}/highlight`] = null;
+        // ==========================================
+        // 🔒 커스텀 비밀번호 모달 제어 로직
+        // ==========================================
+        let pwCallback = null;
+
+        function showPasswordModal(msg, callback) {
+            document.getElementById('pwModalMsg').innerHTML = msg;
+            document.getElementById('pwModalInput').value = '';
+            pwCallback = callback;
+            document.getElementById('passwordModal').style.display = 'flex';
+            setTimeout(() => document.getElementById('pwModalInput').focus(), 100);
+        }
+
+        function closePasswordModal() {
+            document.getElementById('passwordModal').style.display = 'none';
+            pwCallback = null;
+        }
+
+     function submitPasswordModal() {
+            const pw = document.getElementById('pwModalInput').value;
+            const tempCallback = pwCallback; // 💡 창이 닫히기 전에 실행할 작업을 안전하게 백업해 둡니다.
+            closePasswordModal(); // 창을 닫습니다. (여기서 원래 pwCallback이 지워집니다)
+            if(tempCallback) tempCallback(pw); // 💡 백업해둔 작업을 실행합니다!
+        }
+
+        // ==========================================
+        // 기존 비밀번호 로직을 커스텀 모달로 교체
+        // ==========================================
+        function checkAdminPasswordAndOpen() {
+            showPasswordModal("관리자 설정 창에 진입합니다.<br><b style='color:#E65100'>교사 비밀번호</b>를 입력하세요.", (pw) => {
+                const inputPw = String(pw).trim();
+                const targetPw = String(ADMIN_PW).trim(); // 💡 교사 비밀번호만 허용
+                
+                if (inputPw === targetPw || (targetPw === "404" && inputPw === "0404") || (targetPw === "0404" && inputPw === "404")) {
+                    openAdminSettings();
+                } else {
+                    alert("비밀번호가 일치하지 않습니다.");
                 }
-            }
-            updates[`kiosk_history`] = null;
-            
-            try {
-                await window.dbUpdate(window.dbPath(window.db), updates);
-                alert("전체 구입 내역 초기화 완료!");
-            } catch(e) { alert("초기화 실패"); }
+            });
         }
 
-        // ==========================================
-        // 관리자 설정 및 다했니 API 연동
-        // ==========================================
-        function openAdminSettings() { document.getElementById('adminModal').style.display = 'flex'; }
+        function refundAll() {
+            showPasswordModal("⚠️ 모든 구매 내역을 삭제합니다.<br><b style='color:#E65100'>교사 비밀번호</b>를 입력하세요.", async (pw) => {
+                const inputPw = String(pw).trim();
+                const targetPw = String(ADMIN_PW).trim(); // 💡 전체 완료도 교사 비밀번호만 허용
+
+                if(inputPw !== targetPw && !(targetPw === "404" && inputPw === "0404") && !(targetPw === "0404" && inputPw === "404")) {
+                    alert("권한이 없거나 비밀번호가 틀렸습니다.");
+                    return;
+                }
+                
+                const updates = {};
+                for(let code in usersData) {
+                    if(usersData[code].spent || usersData[code].highlight || usersData[code].bonus) {
+                        updates[`kiosk_users/${code}/spent`] = 0;
+                        updates[`kiosk_users/${code}/bonus`] = 0;
+                        updates[`kiosk_users/${code}/highlight`] = null;
+                    }
+                }
+                updates[`kiosk_history`] = null;
+                
+                try {
+                    await window.dbUpdate(window.dbPath(window.db), updates);
+                    alert("전체 구입 내역 초기화 완료!");
+                } catch(e) { alert("초기화 실패"); }
+            });
+        }
+
+        function refundItem(logId, priceValue, code, itemName) {
+            showPasswordModal("이 내역을 완료 처리하시겠습니까?<br><span style='font-size:16px; color:#757575'>(매니저 비밀번호)</span>", async (pw) => {
+                const inputPw = String(pw).trim();
+                const targetAdmin = String(ADMIN_PW).trim();
+                const targetRefund = String(REFUND_PW).trim();
+
+                // 💡 개별 완료는 교사(Admin) 또는 매니저(Refund) 비밀번호 중 하나만 맞아도 통과
+                const isAdminMatch = inputPw === targetAdmin || (targetAdmin === "404" && inputPw === "0404") || (targetAdmin === "0404" && inputPw === "404");
+                const isRefundMatch = inputPw === targetRefund || (targetRefund === "404" && inputPw === "0404") || (targetRefund === "0404" && inputPw === "404");
+
+                if(!isAdminMatch && !isRefundMatch) {
+                    alert("비밀번호가 일치하지 않습니다.");
+                    return;
+                }
+
+                const st = usersData[code];
+                const updates = {};
+                updates[`kiosk_history/${logId}`] = null; 
+                
+                if(st) {
+                    if (itemName && itemName.includes('사용')) {
+                        const newBonus = (st.bonus || 0) - Math.abs(priceValue);
+                        const newHighlight = (st.highlight || 0) + Math.abs(priceValue);
+                        updates[`kiosk_users/${code}/bonus`] = newBonus;
+                        updates[`kiosk_users/${code}/highlight`] = newHighlight === 0 ? null : newHighlight;
+
+                        const originalItemName = itemName.replace(' 사용', '').trim();
+                        let shopUserKey = null;
+                        for (let key in shopStudents) {
+                            if (String(shopStudents[key].cd).trim() === String(code).trim()) {
+                                shopUserKey = key; break;
+                            }
+                        }
+                        if (shopUserKey && shopStudents[shopUserKey].inv) {
+                            const inv = shopStudents[shopUserKey].inv;
+                            for (let idx = inv.length - 1; idx >= 0; idx--) {
+                                if (inv[idx].n === originalItemName && inv[idx].st === 'used') {
+                                    updates[`ClassData/EventShop/stu/${shopUserKey}/inv/${idx}/st`] = 'active';
+                                    break; 
+                                }
+                            }
+                        }
+                    } else {
+                        const newSpent = (st.spent || 0) - parseInt(priceValue);
+                        const newHighlight = (st.highlight || 0) - parseInt(priceValue);
+                        updates[`kiosk_users/${code}/spent`] = newSpent;
+                        updates[`kiosk_users/${code}/highlight`] = newHighlight === 0 ? null : newHighlight;
+                    }
+                }
+
+                try { 
+                    await window.dbUpdate(window.dbPath(window.db), updates); 
+                } catch(e) { alert("사용 처리 실패"); }
+            });
+        }
+               function openAdminSettings() { document.getElementById('adminModal').style.display = 'flex'; }
         function closeModal(id) { document.getElementById(id).style.display = 'none'; }
-
-        function saveApiKey() {
+// 💡 API 키 저장 함수 (Firebase 연동)
+        async function saveApiKey() {
             const key = document.getElementById('configApiKey').value.trim();
-            localStorage.setItem('kiosk_api_key', key);
             API_KEY = key;
-            alert("API Key 저장 완료!");
-            syncAllCookiesSilent(); // 키 저장 후 바로 동기화 시도
+            try {
+                // Firebase의 'kiosk_config' 경로에 저장
+                await window.dbUpdate(window.dbPath(window.db, 'kiosk_config'), { api_key: key });
+                alert("API Key 저장 완료!");
+                syncAllCookiesSilent(); // 키 저장 후 바로 동기화 시도
+            } catch(e) {
+                alert("API Key 저장에 실패했습니다.");
+            }
         }
 
+        // 💡 비밀번호 저장 함수 (Firebase 연동)
+        async function savePasswords() {
+            const aPw = document.getElementById('configAdminPw').value.trim();
+            const rPw = document.getElementById('configRefundPw').value.trim();
+            
+            if(!aPw || !rPw) {
+                alert("비밀번호를 공백으로 둘 수 없습니다.");
+                return;
+            }
+            
+            ADMIN_PW = aPw;
+            REFUND_PW = rPw;
+            try {
+                // Firebase의 'kiosk_config' 경로에 저장
+                await window.dbUpdate(window.dbPath(window.db, 'kiosk_config'), { 
+                    admin_pw: aPw, 
+                    refund_pw: rPw 
+                });
+                alert("비밀번호 저장 완료!");
+            } catch(e) {
+                alert("비밀번호 저장에 실패했습니다.");
+            }
+        }
+       
         async function bulkRegister() {
             if(!API_KEY) return alert("다했니 API Key를 먼저 저장해주세요.");
             const input = document.getElementById('bulkInput').value.trim();

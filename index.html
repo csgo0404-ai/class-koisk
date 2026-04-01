@@ -201,7 +201,100 @@
             from { transform: scale(0.8); opacity: 0; }
             to { transform: scale(1); opacity: 1; }
         }
-    </style>
+/* 🔨 메인 하단 라이브 경매 (구매내역 스타일 + 연한 회색 밑줄) */
+        .main-content {
+            position: relative; 
+            padding-bottom: 220px; 
+        }
+        .live-auction-wrapper {
+            position: absolute;
+            bottom: 30px;
+            left: 30px;
+            right: 30px;
+            background: white;
+            border: 1px solid #E9ECEF;
+            border-radius: 12px;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.05); /* 구매내역과 비슷한 은은한 그림자 */
+            padding: 20px 25px;
+            display: flex;
+            flex-direction: column;
+            z-index: 50;
+        }
+        .live-auction-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            /* 💡 키오스크 메인 제목 밑선과 동일한 연한 회색(#EEE)으로 변경했습니다 */
+            border-bottom: 2px solid #EEE; 
+            padding-bottom: 12px;
+            margin-bottom: 10px;
+        }
+        .live-auction-header h3 {
+            margin: 0;
+            font-size: 20px;
+            font-family: 'Jua', sans-serif;
+            color: #333;
+        }
+        .live-auction-list {
+            display: flex;
+            flex-direction: column;
+            max-height: 140px;
+            overflow-y: auto;
+            padding-right: 5px;
+        }
+        .live-auction-list::-webkit-scrollbar { width: 6px; }
+        .live-auction-list::-webkit-scrollbar-thumb { background: #CCC; border-radius: 3px; }
+
+        .auc-list-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 12px 0;
+            border-bottom: 1px dashed #DDD; /* 구매내역과 동일한 아이템 구분선 */
+            animation: popUpAnim 0.3s ease-out;
+        }
+        .auc-list-item:last-child {
+            border-bottom: none;
+        }
+        .auc-item-info {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+            flex: 1;
+        }
+        .auc-item-name {
+            font-size: 16px;
+            font-weight: 800;
+            color: #000;
+        }
+        .auc-item-bid {
+            font-size: 16px;
+            font-weight: 900;
+            color: #E53935;
+        }
+        .auc-item-bidder {
+            font-size: 14px;
+            color: #666;
+            font-weight: bold;
+        }
+        .auc-timer-box {
+            background: #F8F9FA;
+            border: 1px solid #DDD;
+            color: #333;
+            padding: 4px 12px;
+            border-radius: 6px; /* 둥근 버튼이 아닌 깔끔한 사각형 */
+            font-weight: bold;
+            font-size: 14px;
+            min-width: 80px;
+            text-align: center;
+            transition: 0.3s;
+        }
+        .auc-empty-msg {
+            text-align: center;
+            color: #999;
+            font-size: 14px;
+            padding: 15px 0;
+        } </style>
 </head>
 <body>
 
@@ -219,8 +312,17 @@
 
         <div class="student-grid" id="studentGrid">
             </div>
-    </div>
 
+<div class="live-auction-wrapper">
+            <div class="live-auction-header">
+                <h3>🔨 경매</h3>
+                <span style="font-size:13px; color:#888; font-family:'Pretendard', sans-serif; font-weight:bold;"></span>
+            </div>
+            <div id="liveAuctionBar" class="live-auction-list">
+                </div>
+        </div>
+
+</div>
     <div class="sidebar">
         <div style="display:flex; justify-content:space-between; align-items:center; border-bottom: 2px solid #333; padding-bottom: 15px;">
             <h3 style="margin: 0; font-size: 20px; font-family: 'Jua', sans-serif;">🧾 구매 내역</h3>
@@ -307,23 +409,34 @@
         window.onload = () => {
             document.getElementById('configApiKey').value = API_KEY;
 
+            // 🧑‍🎓 1. 학생 명단 불러오기 (이 부분이 지워져서 안 떴습니다!)
             window.dbOnValue(window.dbPath(window.db, 'kiosk_users'), (snap) => {
                 usersData = snap.val() || {};
                 renderStudents();
                 updateModalCookieUI();
             });
 
+            // 🔨 2. 이벤트 상점 경매 데이터 실시간 감시
+            window.dbOnValue(window.dbPath(window.db, 'ClassData/EventShop/auc'), (snap) => {
+                const rawData = snap.val() || {};
+                window.auctionData = Array.isArray(rawData) ? rawData : Object.values(rawData);
+                renderLiveAuctions();
+            });
+            setInterval(updateAuctionTimers, 1000);
+
+            // 🎁 3. 키오스크 아이템 감시
             window.dbOnValue(window.dbPath(window.db, 'kiosk_items'), (snap) => {
                 itemsData = snap.val() || {};
                 renderAdminItems();
             });
 
+            // 🧾 4. 키오스크 구매 내역 감시
             window.dbOnValue(window.dbPath(window.db, 'kiosk_history'), (snap) => {
                 historyData = snap.val() || {};
                 renderHistory();
             });
 
-            // 🎒 이벤트 상점 데이터 전체를 실시간 감시
+            // 🎒 5. 이벤트 상점 가방 데이터 연동 감시
             window.dbOnValue(window.dbPath(window.db, 'ClassData/EventShop/stu'), (snap) => {
                 shopStudents = snap.val() || {};
                 if(document.getElementById('purchaseModal').style.display === 'flex' && currentBuyerCode) {
@@ -331,10 +444,9 @@
                 }
             });
 
-            // 💡 [스마트 자동 동기화] 5초마다 다했니 쿠키를 조용히 최신화합니다 (가장 빠르고 안전한 주기)
+            // 💡 [스마트 자동 동기화] 5초마다 다했니 쿠키를 조용히 최신화합니다
             setInterval(syncAllCookiesSilent, 5000);
         };
-
         // ==========================================
         // UI 렌더링 (학생, 히스토리, 설정 메뉴판)
         // ==========================================
@@ -565,44 +677,7 @@ const logs = Object.values(historyData).sort((a, b) => a.timestamp - b.timestamp
             if (confirmAction) confirmAction();
             closeConfirmModal();
         };
-        // 🎟️ 복권 사용 로직 (기존 함수 덮어쓰기)
-        async function useLottery(shopUserKey, itemIdx) {
-            const st = usersData[currentBuyerCode];
-            const item = shopStudents[shopUserKey].inv[itemIdx];
-            const itemName = item.n; 
-
-            const match = itemName.match(/\d+/);
-            const result = match ? parseInt(match[0]) : 0;
-
-            // 기본 confirm 대신 예쁜 팝업 띄우기
-            showConfirmModal(
-                item.i || '🎟️',
-                "복권을 사용하시겠습니까?",
-                `<span style="color:#FF6F00; font-size:26px;">[${itemName}]</span><br>사용 시 <b style="color:#4CAF50;">+${result} 쿠키</b> 획득!`,
-                async () => {
-                    const logId = Date.now().toString();
-                    const newBonus = (st.bonus || 0) + result;
-                    const newHighlight = (st.highlight || 0) - result; 
-
-                    const updates = {};
-                    updates[`kiosk_users/${currentBuyerCode}/bonus`] = newBonus;
-                    updates[`kiosk_users/${currentBuyerCode}/highlight`] = newHighlight;
-                    updates[`kiosk_history/${logId}`] = {
-                        id: logId, code: currentBuyerCode, studentName: st.name,
-                        itemName: `${itemName} 사용`, price: -result, timestamp: Date.now()
-                    };
-                    updates[`ClassData/EventShop/stu/${shopUserKey}/inv/${itemIdx}/st`] = 'used';
-
-                    try {
-                        await window.dbUpdate(window.dbPath(window.db), updates);
-                        alert(`🎉 축하합니다!\n${result} 🍪를 획득했습니다!`);
-                    } catch(e) {
-                        alert("처리 중 오류가 발생했습니다.");
-                    }
-                }
-            );
-        }
-
+       
        // 🛒 키오스크 일반 메뉴 결제 로직 (기존 함수 덮어쓰기)
         async function executePurchase(itemId, itemName, priceValue) {
             const st = usersData[currentBuyerCode];
@@ -646,19 +721,41 @@ const logs = Object.values(historyData).sort((a, b) => a.timestamp - b.timestamp
         }
 
         async function refundItem(logId, priceValue, code, itemName) {
-            if(!confirm("이 내역을 사용 처리하시겠습니까?")) return;
+            if(!confirm("이 내역을 취소(환불) 처리하시겠습니까?\n(가방 아이템인 경우 가방으로 다시 복구됩니다)")) return;
 
             const st = usersData[code];
             const updates = {};
             updates[`kiosk_history/${logId}`] = null; 
             
             if(st) {
-                if (itemName && itemName.includes('복권 당첨')) {
+                // 🎟️ 복권 등 가방 아이템 사용 취소인 경우
+                if (itemName && itemName.includes('사용')) {
                     const newBonus = (st.bonus || 0) - Math.abs(priceValue);
                     const newHighlight = (st.highlight || 0) + Math.abs(priceValue);
                     updates[`kiosk_users/${code}/bonus`] = newBonus;
                     updates[`kiosk_users/${code}/highlight`] = newHighlight === 0 ? null : newHighlight;
-                } else {
+
+                    // 🎒 이벤트 상점 가방에 아이템 다시 살려주기 로직
+                    const originalItemName = itemName.replace(' 사용', '').trim();
+                    let shopUserKey = null;
+                    for (let key in shopStudents) {
+                        if (String(shopStudents[key].cd).trim() === String(code).trim()) {
+                            shopUserKey = key; break;
+                        }
+                    }
+                    if (shopUserKey && shopStudents[shopUserKey].inv) {
+                        const inv = shopStudents[shopUserKey].inv;
+                        // 가장 최근에 사용된 해당 아이템 하나만 찾아서 active로 복구
+                        for (let idx = inv.length - 1; idx >= 0; idx--) {
+                            if (inv[idx].n === originalItemName && inv[idx].st === 'used') {
+                                updates[`ClassData/EventShop/stu/${shopUserKey}/inv/${idx}/st`] = 'active';
+                                break; 
+                            }
+                        }
+                    }
+                } 
+                // 🍔 일반 키오스크 상점 아이템 결제 취소인 경우
+                else {
                     const newSpent = (st.spent || 0) - parseInt(priceValue);
                     const newHighlight = (st.highlight || 0) - parseInt(priceValue);
                     updates[`kiosk_users/${code}/spent`] = newSpent;
@@ -666,8 +763,9 @@ const logs = Object.values(historyData).sort((a, b) => a.timestamp - b.timestamp
                 }
             }
 
-            try { await window.dbUpdate(window.dbPath(window.db), updates); } 
-            catch(e) { alert("사용 처리 실패"); }
+            try { 
+                await window.dbUpdate(window.dbPath(window.db), updates); 
+            } catch(e) { alert("사용 처리 실패"); }
         }
 
         async function refundAll() {
@@ -809,6 +907,115 @@ const logs = Object.values(historyData).sort((a, b) => a.timestamp - b.timestamp
             if(confirm("이 메뉴를 삭제하시겠습니까?")) {
                 await window.dbSet(window.dbPath(window.db, `kiosk_items/${itemId}`), null);
             }
+        }
+// ==========================================
+        // 🔨 라이브 경매 렌더링 (구매내역 스타일)
+        // ==========================================
+        function renderLiveAuctions() {
+            const bar = document.getElementById('liveAuctionBar');
+            if(!window.auctionData) return;
+            
+            const activeAucs = window.auctionData.filter(a => a && a.st === 'active');
+
+            if (activeAucs.length === 0) {
+                bar.innerHTML = '<div class="auc-empty-msg">현재 진행 중인 경매가 없습니다.</div>';
+                return;
+            }
+
+            bar.innerHTML = activeAucs.map(a => {
+                const curEmojiMap = {cn: '🍭', tk: '🧺', kc: '🍪', co: '🪙'};
+                const emoji = curEmojiMap[a.cur] || '🍪';
+                
+                // 최고 입찰자 계산
+                const topBid = a.bids && a.bids.length > 0 ? Math.max(...a.bids.map(b=>b.amt)) : a.cp;
+                const topBidders = a.bids ? a.bids.filter(b=>b.amt === topBid) : [];
+                const topName = topBidders.length > 0 ? topBidders[topBidders.length-1].nm : '없음';
+
+                return `
+                <div class="auc-list-item">
+                    <div class="auc-item-info">
+                        <span style="color:#E53935; font-size:12px; animation: pulseAlert 1.5s infinite;">🔴</span>
+                        <span class="auc-item-name">${a.n}</span>
+                        <span class="auc-item-bid">${topBid}${emoji}</span>
+                        <span class="auc-item-bidder">(👑 ${topName})</span>
+                    </div>
+                    <div class="auc-timer-box auc-kiosk-timer" data-et="${a.et}">⏱️ 계산중...</div>
+                </div>
+                `;
+            }).join('');
+            
+            updateAuctionTimers();
+        }
+
+        // ==========================================
+        // 🎟️ 복권 사용 로직 (무조건 +5 쿠키 지급)
+        // ==========================================
+        async function useLottery(shopUserKey, itemIdx) {
+            const st = usersData[currentBuyerCode];
+            const item = shopStudents[shopUserKey].inv[itemIdx];
+            const itemName = item.n; 
+
+            // 💡 아이템 이름에 상관없이 무조건 +5 쿠키 지급
+            const result = 5; 
+
+            showConfirmModal(
+                item.i || '🎟️',
+                "복권을 사용하시겠습니까?",
+                `<span style="color:#FF6F00; font-size:26px;">[${itemName}]</span><br>사용 시 <b style="color:#4CAF50;">+${result} 쿠키</b> 획득!`,
+                async () => {
+                    const logId = Date.now().toString();
+                    const newBonus = (st.bonus || 0) + result;
+                    const newHighlight = (st.highlight || 0) - result; 
+
+                    const updates = {};
+                    updates[`kiosk_users/${currentBuyerCode}/bonus`] = newBonus;
+                    updates[`kiosk_users/${currentBuyerCode}/highlight`] = newHighlight;
+                    updates[`kiosk_history/${logId}`] = {
+                        id: logId, code: currentBuyerCode, studentName: st.name,
+                        itemName: `${itemName} 사용`, price: -result, timestamp: Date.now()
+                    };
+                    updates[`ClassData/EventShop/stu/${shopUserKey}/inv/${itemIdx}/st`] = 'used';
+
+                    try {
+                        await window.dbUpdate(window.dbPath(window.db), updates);
+                        alert(`🎉 축하합니다!\n${result} 🍪를 획득했습니다!`);
+                        
+                        // 사용 후 즉시 키오스크 가방 화면 갱신
+                        renderInventoryGrid(currentBuyerCode);
+                    } catch(e) {
+                        alert("처리 중 오류가 발생했습니다.");
+                    }
+                }
+            );
+        }
+
+      function updateAuctionTimers() {
+            const now = Date.now();
+            document.querySelectorAll('.auc-kiosk-timer').forEach(el => {
+                const et = parseInt(el.getAttribute('data-et'));
+                if (et > now) {
+                    const diff = Math.floor((et - now) / 1000);
+                    const m = Math.floor(diff / 60);
+                    const s = diff % 60;
+                    el.innerText = `⏱️ ${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
+                    
+                    // 1분 미만일 때 긴장감 조성
+                    if (diff <= 60) {
+                        el.style.background = '#FFEBEE';
+                        el.style.color = '#E53935';
+                        el.style.animation = 'pulseAlert 1s infinite';
+                    } else {
+                        el.style.background = '#E3F2FD';
+                        el.style.color = '#1976D2';
+                        el.style.animation = 'none';
+                    }
+                } else {
+                    el.innerText = "마감됨";
+                    el.style.background = '#EEEEEE';
+                    el.style.color = '#9E9E9E';
+                    el.style.animation = 'none';
+                }
+            });
         }
     </script>
 </body>

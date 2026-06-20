@@ -10,7 +10,7 @@
 
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
-        import { getDatabase, ref, set, get, child, update, onValue, increment } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js";
+        import { getDatabase, ref, set, get, child, update, onValue, increment, query, orderByChild, equalTo } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js";
 
         const firebaseConfig = {
   apiKey: "AIzaSyCzsI9FW3bga1V73lCR7pNgfPLdcqcbsgM",
@@ -36,12 +36,19 @@
         window.dbOnValue = onValue;
         window.dbPath = ref;
         window.dbIncrement = increment;   // 원자적 증감(동시 쓰기 경합 방지)
+        window.dbQuery = query; window.dbOrderByChild = orderByChild; window.dbEqualTo = equalTo;
     </script>
 
     <style>
         @import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard/dist/web/static/pretendard.css');
 
         * { box-sizing: border-box; font-family: 'Pretendard', sans-serif; }
+        /* 🎨 전체 스크롤바: 연노랑 파스텔톤 */
+        ::-webkit-scrollbar { width: 10px; height: 10px; }
+        ::-webkit-scrollbar-track { background: #FFFDF5; border-radius: 10px; }
+        ::-webkit-scrollbar-thumb { background: #FFF0B3; border-radius: 10px; border: 2px solid #FFFDF5; }
+        ::-webkit-scrollbar-thumb:hover { background: #FFE082; }
+        * { scrollbar-color: #FFF0B3 #FFFDF5; }
         body { margin: 0; display: flex; height: 100vh; background: #F8F9FA; color: #333; overflow: hidden; }
         
         /* 레이아웃 */
@@ -157,12 +164,32 @@
         .purchase-modal-content { background: white; padding: 30px; border-radius: 25px; width: 600px; max-width: 90%; box-shadow: 0 15px 35px rgba(0,0,0,0.2); position: relative; }
         .buyer-info { text-align: center; margin-bottom: 25px; }
         .buyer-name { font-size: 28px; font-weight: 800; }
-        .item-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 15px; }
-        .item-card { border: 2px solid #EEE; border-radius: 15px; padding: 20px 10px; text-align: center; cursor: pointer; transition: 0.2s; position: relative; }
-        .item-card:hover { border-color: #4CAF50; background: #F1F8E9; transform: translateY(-3px); box-shadow: 0 5px 10px rgba(0,0,0,0.05); }
-        .item-icon { font-size: 40px; margin-bottom: 10px; }
-        .item-name { font-weight: 700; font-size: 16px; }
-        .item-price { font-weight: 900; margin-top: 5px; font-size: 16px; }
+        .item-grid { display: grid; grid-template-columns: repeat(auto-fill, 140px); gap: 14px; justify-content: start; }
+        /* 구입 모달 3분할 컬럼 */
+        .modal-col { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+        .col-scroll { overflow-y: auto; max-height: 60vh; align-content: start; padding: 2px 6px 2px 2px; }
+        /* 영역별 파스텔 배경 (내 가방=하늘 / 키오스크=크림 / 부스=민트) */
+        #modalInventoryGrid .item-card { background:#EAF4FF; border-color:#CFE6FB; }
+        #modalInventoryGrid .item-card:hover { border-color:#64B5F6; }
+        #modalItemGrid .item-card { background:#FFF6E6; border-color:#FFE0B2; }
+        #modalItemGrid .item-card:hover { border-color:#FFB74D; }
+        #modalBoothGrid .item-card { background:#E6F7F4; border-color:#B2DFDB; }
+        #modalBoothGrid .item-card:hover { border-color:#4DB6AC; }
+        /* 🛒 구입 카드 — A. 화이트 + 카테고리 색칩 (전 영역 통일) */
+        .item-card { border: 2px solid #ECEFF1; border-radius: 16px; padding: 12px 8px; text-align: center; cursor: pointer; transition: 0.2s; position: relative; aspect-ratio: 1 / 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px; background: #FFFFFF; box-shadow: 0 3px 8px rgba(0,0,0,0.05); }
+        .item-card:hover { border-color: #FFCA28; transform: translateY(-3px); box-shadow: 0 6px 14px rgba(0,0,0,0.10); }
+        .item-icon { font-size: 38px; margin-bottom: 4px; }
+        .item-name { font-weight: 800; font-size: 15px; color:#3E2723; }
+        .item-price { font-weight: 900; font-size: 15px; margin-top: 2px; }
+        /* 쿠키 보유 배지(우측 하단, 어두움) */
+        .bag-cnt { position: absolute; right: 8px; bottom: 8px; background: #3E2723; color: #fff;
+                   border-radius: 12px; padding: 3px 11px; font-size: 14px; font-weight: 900; z-index: 2; }
+        /* 개수 배지(우측 상단, 파랑 ×N) */
+        .badge-cnt { position: absolute; right: 7px; top: 7px; background: #1976D2; color: #fff; border-radius: 50%;
+                     width: 24px; height: 24px; display: flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 900; z-index: 2; }
+        .modal-x { position: absolute; top: 14px; right: 16px; width: 40px; height: 40px; border: none; background: transparent;
+                   font-size: 30px; line-height: 1; color: #9E9E9E; cursor: pointer; z-index: 5; border-radius: 50%; transition: 0.15s; }
+        .modal-x:hover { color: #E53935; background: rgba(0,0,0,0.05); }
         .btn-close { width: 100%; padding: 15px; border-radius: 15px; border: none; background: #F1F3F5; font-size: 16px; font-weight: bold; cursor: pointer; margin-top: 20px; transition: 0.2s; }
         .btn-close:hover { background: #E9ECEF; }
 
@@ -171,6 +198,7 @@
             background: #FFFDF2; padding: 40px; border-radius: 40px;
             width: 750px; max-width: 90%; box-shadow: 0 20px 50px rgba(0,0,0,0.15);
             border: 5px dashed #FFE0B2; position: relative;
+            max-height: 88vh; overflow-y: auto;
         }
         .admin-header h2 { margin: 0 0 25px 0; font-family: 'Jua', sans-serif; font-size: 32px; color: #5D4037; }
         .admin-section { background: #FFF; padding: 20px; border-radius: 20px; margin-bottom: 15px; border: 2px solid #F5F5F5; }
@@ -553,13 +581,13 @@
     <div class="sidebar" id="boothSidebar">
         <div style="display:flex; justify-content:space-between; align-items:center; border-bottom: 2px solid #333; padding-bottom: 15px;">
             <h3 style="margin: 0; font-size: 20px; font-family: 'Jua', sans-serif; display:flex; align-items:center; gap:8px;">
-                🧾 <span>구매 내역</span>
+                <span onclick="resetOrders()" title="구매 내역 초기화" style="cursor:pointer;">🧾</span> <span>구매 내역</span>
             </h3>
         </div>
         <div class="history-list" id="orderList" style="flex:1;"></div>
 
         <!-- 🎁 가방·복권 사용 요청 (즉시 처리분) -->
-        <div id="bagUseSection" style="border-top:2px dashed #DDD; padding-top:12px; margin-top:8px;">
+        <div id="bagUseSection" style="border-top:2px dashed #DDD; padding-top:12px; margin-top:8px; display:none;">
             <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
                 <h3 style="margin:0; font-size:16px; font-family:'Jua',sans-serif; display:flex; align-items:center; gap:6px;">
                     <span style="cursor:pointer;" onclick="window.toggleAllHistory()" title="전체 선택/해제">🎁</span>
@@ -571,29 +599,30 @@
         </div>
     </div>
     <div class="modal-overlay" id="purchaseModal">
-        <div class="purchase-modal-content" style="width:880px;">
+        <div class="purchase-modal-content" style="width:1140px;">
+            <button class="modal-x" onclick="closeModal('purchaseModal')" title="닫기">×</button>
             <div class="buyer-info">
                 <div class="buyer-name" id="modalStName">학생 이름</div>
-                <div style="font-size: 18px; color: #6D4C41; font-weight: 700; margin-top: 5px;">보유: <span id="modalStCandy" style="font-size: 24px; color: #E65100;">0</span> 🍪</div>
+                <span id="modalStCandy" style="display:none;">0</span>
             </div>
 
-            <div style="display:flex; gap:24px; align-items:flex-start; margin-top:16px;">
-                <!-- 좌: 내 가방 -->
-                <div style="flex:1; min-width:0; max-height:62vh; overflow-y:auto;">
+            <div style="display:flex; gap:20px; align-items:stretch; margin-top:16px;">
+                <!-- 1. 내 가방 -->
+                <div class="modal-col">
                     <h3 style="margin: 0 0 10px 0; font-size: 18px; color: #1976D2;">🎒 내 가방</h3>
-                    <div class="item-grid" id="modalInventoryGrid"></div>
+                    <div class="item-grid col-scroll" id="modalInventoryGrid"></div>
                 </div>
-                <!-- 우: 키오스크 상점 + 부스마켓 -->
-                <div style="flex:1; min-width:0; max-height:62vh; overflow-y:auto; border-left:2px dashed #EEE; padding-left:24px;">
+                <!-- 2. 키오스크 상점 -->
+                <div class="modal-col" style="border-left:2px dashed #EEE; padding-left:20px;">
                     <h3 style="margin: 0 0 10px 0; font-size: 18px; color: #E65100;">🏪 키오스크 상점</h3>
-                    <div class="item-grid" id="modalItemGrid"></div>
-                    <div id="kioskBoothSection" style="display:none; margin-top:20px;">
-                        <h3 style="margin: 0 0 10px 0; font-size: 18px; color: #00897B;">🏪 부스마켓</h3>
-                        <div class="item-grid" id="modalBoothGrid"></div>
-                    </div>
+                    <div class="item-grid col-scroll" id="modalItemGrid"></div>
+                </div>
+                <!-- 3. 부스마켓 -->
+                <div class="modal-col" id="kioskBoothSection" style="display:none; border-left:2px dashed #EEE; padding-left:20px;">
+                    <h3 style="margin: 0 0 10px 0; font-size: 18px; color: #00897B;">🏪 부스마켓</h3>
+                    <div class="item-grid col-scroll" id="modalBoothGrid"></div>
                 </div>
             </div>
-            <button class="btn-close" onclick="closeModal('purchaseModal')">닫기</button>
         </div>
     </div>
 
@@ -682,14 +711,32 @@
         <div style="background:#FFFDF9; border:5px solid #FFE0B2; border-radius:30px; width:380px; max-width:92%; padding:28px; text-align:center; box-shadow:0 15px 35px rgba(0,0,0,0.2); animation:popUpAnim 0.3s ease-out;">
             <div id="payIcon" style="font-size:60px; margin-bottom:6px;">🛒</div>
             <h2 id="payTitle" style="font-family:'Jua',sans-serif; font-size:24px; color:#5D4037; margin:0 0 14px;">결제</h2>
+            <div id="payQtyRow" style="background:#F1F8FF; border-radius:14px; padding:12px; margin-bottom:14px; display:none;">
+                <div style="font-weight:800; color:#1976D2; margin-bottom:8px;">🛒 구입 개수</div>
+                <div style="display:flex; align-items:center; justify-content:center; gap:12px;">
+                    <button onclick="payQtyChange(-1)" style="width:42px; height:42px; border-radius:50%; border:none; background:#BBDEFB; font-size:24px; font-weight:bold; cursor:pointer;">−</button>
+                    <input type="number" id="payQty" value="1" min="1" oninput="payQtyInput()" onfocus="this.select()" style="font-family:'Jua',sans-serif; font-size:30px; color:#1565C0; width:80px; text-align:center; border:2px solid #BBDEFB; border-radius:12px; padding:4px 0; -moz-appearance:textfield;">
+                    <button onclick="payQtyChange(1)" style="width:42px; height:42px; border-radius:50%; border:none; background:#BBDEFB; font-size:24px; font-weight:bold; cursor:pointer;">+</button>
+                    <span style="color:#8D6E63; font-weight:700;">개</span>
+                </div>
+            </div>
             <div style="font-size:18px; color:#5D4037; margin-bottom:6px;">구매 가격 <b id="payPrice" style="color:#E53935;">0</b>🍪</div>
             <div style="font-size:16px; color:#6D4C41; margin-bottom:16px;">내 쿠키 <b id="payAvail" style="color:#E65100;">0</b>🍪 <span id="payAvailOk"></span></div>
-            <div id="payCouponRow" style="background:#FFF8E1; border-radius:14px; padding:12px; margin-bottom:14px;">
-                <div style="font-weight:800; color:#5D4037; margin-bottom:8px;">🎟️ 상점 이용권 사용 <span style="font-size:13px; color:#888;">(보유 <span id="payCouponMax">0</span>개) · 1:1로 대체</span></div>
+            <div id="payVoucherRow" style="background:#FFF8E1; border-radius:14px; padding:10px 12px; margin-bottom:10px;">
+                <div style="font-weight:800; color:#5D4037; margin-bottom:6px;">🎟️ 상점 이용권 사용 <span style="font-size:13px; color:#888;">(보유 <span id="payVoucherMax">0</span>개) · 1:1로 대체</span></div>
                 <div style="display:flex; align-items:center; justify-content:center; gap:12px;">
-                    <button onclick="payCouponChange(-1)" style="width:42px; height:42px; border-radius:50%; border:none; background:#FFE0B2; font-size:24px; font-weight:bold; cursor:pointer;">−</button>
-                    <input type="number" id="payCoupon" value="0" min="0" oninput="payCouponInput()" onfocus="this.select()" style="font-family:'Jua',sans-serif; font-size:30px; color:#E65100; width:80px; text-align:center; border:2px solid #FFE0B2; border-radius:12px; padding:4px 0; -moz-appearance:textfield;">
-                    <button onclick="payCouponChange(1)" style="width:42px; height:42px; border-radius:50%; border:none; background:#FFE0B2; font-size:24px; font-weight:bold; cursor:pointer;">+</button>
+                    <button onclick="payCouponChange('voucher',-1)" style="width:40px; height:40px; border-radius:50%; border:none; background:#FFE0B2; font-size:22px; font-weight:bold; cursor:pointer;">−</button>
+                    <input type="number" id="payVoucher" value="0" min="0" oninput="payCouponInput()" onfocus="this.select()" style="font-family:'Jua',sans-serif; font-size:28px; color:#E65100; width:70px; text-align:center; border:2px solid #FFE0B2; border-radius:12px; padding:3px 0; -moz-appearance:textfield;">
+                    <button onclick="payCouponChange('voucher',1)" style="width:40px; height:40px; border-radius:50%; border:none; background:#FFE0B2; font-size:22px; font-weight:bold; cursor:pointer;">+</button>
+                    <span style="color:#8D6E63; font-weight:700;">개</span>
+                </div>
+            </div>
+            <div id="payMondayRow" style="background:#FFF3CF; border-radius:14px; padding:10px 12px; margin-bottom:14px;">
+                <div style="font-weight:800; color:#5D4037; margin-bottom:6px;">🌞 월요 쿠키 사용 <span style="font-size:13px; color:#888;">(보유 <span id="payMondayMax">0</span>개) · 1:1로 대체</span></div>
+                <div style="display:flex; align-items:center; justify-content:center; gap:12px;">
+                    <button onclick="payCouponChange('monday',-1)" style="width:40px; height:40px; border-radius:50%; border:none; background:#FFE082; font-size:22px; font-weight:bold; cursor:pointer;">−</button>
+                    <input type="number" id="payMonday" value="0" min="0" oninput="payCouponInput()" onfocus="this.select()" style="font-family:'Jua',sans-serif; font-size:28px; color:#E65100; width:70px; text-align:center; border:2px solid #FFE082; border-radius:12px; padding:3px 0; -moz-appearance:textfield;">
+                    <button onclick="payCouponChange('monday',1)" style="width:40px; height:40px; border-radius:50%; border:none; background:#FFE082; font-size:22px; font-weight:bold; cursor:pointer;">+</button>
                     <span style="color:#8D6E63; font-weight:700;">개</span>
                 </div>
             </div>
@@ -770,9 +817,8 @@
             <h2 id="soTitle" style="font-family:'Jua',sans-serif; color:#5D4037; text-align:center; margin:0 0 6px;">🧒 학생</h2>
             <div id="soSub" style="text-align:center; color:#8D6E63; font-weight:700; margin-bottom:18px;"></div>
             <div id="soBody"></div>
-            <div style="display:flex; gap:12px; margin-top:16px;">
-                <button class="btn-close" style="flex:1; margin-top:0;" onclick="closeModal('studentOrdersModal')">닫기</button>
-                <button class="btn-settle" style="flex:1; border-radius:15px;" onclick="settleStudentFromModal()">이 학생 전체 정산</button>
+            <div style="margin-top:16px;">
+                <button class="btn-close" style="width:100%; margin-top:0;" onclick="closeModal('studentOrdersModal')">닫기</button>
             </div>
         </div>
     </div>
@@ -780,7 +826,7 @@
     <!-- 🧾 부스별 구매내역 모달 -->
     <div class="modal-overlay" id="boothHistModal" onclick="closeModal('boothHistModal')">
         <div class="sales-modal-content" onclick="event.stopPropagation()">
-            <h2 id="boothHistTitle" style="font-family:'Jua',sans-serif; color:#5D4037; text-align:center; margin:0 0 6px;">🧾 구매내역</h2>
+            <h2 id="boothHistTitle" style="font-family:'Jua',sans-serif; color:#5D4037; text-align:center; margin:0 0 6px;">구매내역</h2>
             <div id="boothHistSub" style="text-align:center; color:#8D6E63; font-weight:700; margin-bottom:18px;"></div>
             <div id="boothHistBody"></div>
             <button class="btn-close" onclick="closeModal('boothHistModal')">닫기</button>
@@ -843,27 +889,16 @@
                 updateModalCookieUI();
             });
 
-            // 🔨 2. 이벤트 상점 경매 데이터 실시간 감시
-            window.dbOnValue(window.dbPath(window.db, 'ClassData/EventShop/auc'), (snap) => {
-                const rawData = snap.val() || {};
-                window.auctionData = Array.isArray(rawData) ? rawData : Object.values(rawData);
-                renderLiveAuctions();
-            });
-            setInterval(updateAuctionTimers, 1000);
+            // [트래픽 절감] 경매(auc)·구매내역(kiosk_history) 구독 제거 — 키오스크에서 미사용
+            //  · 경매 UI는 숨김(display:none), 가방 사용요청 흐름은 비활성화됨
 
-            // 🎁 3. 키오스크 아이템 감시
+            // 🎁 키오스크 아이템 감시
             window.dbOnValue(window.dbPath(window.db, 'kiosk_items'), (snap) => {
                 itemsData = snap.val() || {};
                 renderAdminItems();
             });
 
-            // 🧾 4. 키오스크 구매 내역 감시
-            window.dbOnValue(window.dbPath(window.db, 'kiosk_history'), (snap) => {
-                historyData = snap.val() || {};
-                renderHistory();
-            });
-
-            // 🎒 5. 이벤트 상점 가방 데이터 연동 감시
+            // 🎒 이벤트 상점 가방 데이터 연동 감시
             window.dbOnValue(window.dbPath(window.db, 'ClassData/EventShop/stu'), (snap) => {
                 shopStudents = snap.val() || {};
                 window._shopLoaded = true;  // 상점 데이터 도착 → 이제 정확한 가방 쿠키로 렌더
@@ -901,13 +936,24 @@
                 if (currentBoothId) renderBoothItems();
             });
 
-            // 💡 [트래픽 절감] 구매내역(보류 주문)·매출 집계는 교사 기기만 실시간 구독
-            if (window._isTeacher) {
-                window.dbOnValue(window.dbPath(window.db, 'kiosk_orders'), (snap) => {
+            // 구매내역(보류 주문): 교사=전체, 학생 부스=자기 부스만(필터 쿼리로 수신량 절감)
+            if (window._isTeacher || bid) {
+                let ordersTarget;
+                if (bid) {
+                    boothFilter = bid;
+                    ordersTarget = window.dbQuery(window.dbPath(window.db, 'kiosk_orders'),
+                                                  window.dbOrderByChild('boothId'), window.dbEqualTo(bid));
+                } else {
+                    ordersTarget = window.dbPath(window.db, 'kiosk_orders');
+                }
+                window.dbOnValue(ordersTarget, (snap) => {
                     ordersData = snap.val() || {};
                     renderOrders();
                     renderKioskBoothStatus();
                 });
+            }
+            // 💡 매출 집계는 교사 기기만 실시간 구독
+            if (window._isTeacher) {
                 window.dbOnValue(window.dbPath(window.db, 'kiosk_booth_stats'), (snap) => {
                     boothStats = snap.val() || {};
                     renderKioskBoothStatus();
@@ -923,7 +969,7 @@
                 // 학생 부스 링크: 목록 화면 깜빡임 없이 곧장 운영화면으로
                 document.getElementById('boothView').style.display = 'flex';
                 document.getElementById('kioskWrap').style.display = 'none';
-                document.getElementById('boothSidebar').style.display = 'none';
+                document.getElementById('boothSidebar').style.display = 'flex';   // 학생 부스도 구매내역 표시
                 document.getElementById('boothListScreen').style.display = 'none';
                 window._mode = 'booth';
                 window._pendingBooth = bid;
@@ -1096,15 +1142,15 @@
                         .sort((a,b)=>(a.createdAt||0)-(b.createdAt||0));
                     if (bItems.length === 0) return;
                     boothHtml += bItems.map(it => `
-                    <div class="item-card" style="border-color:#80CBC4; background:#E0F2F1;" onclick="buyBoothItemKiosk('${b.id}','${it.id}')">
+                    <div class="item-card" onclick="buyBoothItemKiosk('${b.id}','${it.id}')">
                         <div class="item-icon">${iconHtml(it.emoji, '🍬')}</div>
                         <div class="item-name">${it.name||'상품'}</div>
-                        <div class="item-price" style="color:#00897B; font-size:12px;">${b.icon||'🏪'} ${b.name||'부스'}</div>
+                        <div style="color:#00897B; font-size:11px; font-weight:700;">${b.icon||'🏪'} ${b.name||'부스'}</div>
                         <div class="item-price" style="color:#E53935;">-${it.price||0}🍪</div>
                     </div>`).join('');
                 });
             if (boothHtml) {
-                document.getElementById('kioskBoothSection').style.display = 'block';
+                document.getElementById('kioskBoothSection').style.display = 'flex';
                 document.getElementById('modalBoothGrid').innerHTML = boothHtml;
             } else {
                 document.getElementById('kioskBoothSection').style.display = 'none';
@@ -1145,8 +1191,17 @@
                 return;
             }
 
+            // 🍪 보유 쿠키 카드 (가방 맨 위 고정)
+            const avail = shopAvail(code);
+            const cookieCard = `
+                <div class="item-card" style="cursor:default;">
+                    <div class="item-icon">🍪</div>
+                    <div class="item-name">쿠키</div>
+                    <div class="bag-cnt">${avail==null?'–':avail}</div>
+                </div>`;
+
             if(!myInv || Object.keys(myInv).length === 0) {
-                invGrid.innerHTML = `<div style="grid-column: span 3; color:#999; text-align:center;">가방이 비어있습니다.</div>`;
+                invGrid.innerHTML = cookieCard;
                 return;
             }
 
@@ -1155,14 +1210,18 @@
             const grouped = {};
             Object.keys(myInv).forEach(idx => {
                 const item = myInv[idx];
-                if(item && item.st === 'active') {
-                    if(!grouped[item.n]) grouped[item.n] = { item, indices: [] };
-                    grouped[item.n].indices.push(idx);
-                }
+                if(!item || item.st !== 'active') return;
+                const nm = String(item.n || '').replace(/\s/g,'');
+                const isCoupon = nm.includes('상점이용권');
+                const isMonday = nm.includes('월요쿠키');
+                if(!(isCoupon || isMonday)) return;   // 월요 쿠키·상점 이용권만 표시
+                if(isMonday && item.locked) return;    // 잠금된 월요 쿠키는 숨김
+                if(!grouped[item.n]) grouped[item.n] = { item, indices: [] };
+                grouped[item.n].indices.push(idx);
             });
 
             if(Object.keys(grouped).length === 0) {
-                invGrid.innerHTML = `<div style="grid-column: span 3; color:#999; text-align:center;">사용 가능한 아이템이 없습니다.</div>`;
+                invGrid.innerHTML = cookieCard;
                 return;
             }
 
@@ -1170,16 +1229,17 @@
             let gIdx = 0;
             Object.values(grouped).forEach(({ item, indices }) => {
                 const count = indices.length;
-                const isLottery = item.n.includes('복권') || item.n.includes('상점 이용권');
+                // 상점 이용권·복권·월요 쿠키 = 쿠키로 교환되는 아이템(1:1)
+                const _nmL = String(item.n||'').replace(/\s/g,'');
+                const isLottery = _nmL.includes('복권') || _nmL.includes('상점이용권') || _nmL.includes('월요쿠키');
                 const gk = 'g' + (gIdx++);
                 window._invGrouped[gk] = { shopUserKey, indices, item, count, isLottery };
 
-                const badgeColor = isLottery ? '#1976D2' : '#FF8F00';
-                const countBadge = count > 1 ? `<div style="position:absolute;right:8px;bottom:8px;background:${badgeColor};color:white;border-radius:50%;width:24px;height:24px;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:bold;">×${count}</div>` : '';
+                const countBadge = count > 1 ? `<div class="badge-cnt">×${count}</div>` : '';  // 우측 상단 파랑 ×N
 
                 if(isLottery) {
                     invHtml += `
-                    <div class="item-card" style="border-color:#42A5F5; background:#E3F2FD;" onclick="openInvItem('${gk}')">
+                    <div class="item-card" style="cursor:default;">
                         <div class="item-icon">${iconHtml(item.i, '🎟️')}</div>
                         <div class="item-name">${item.n}</div>
                         <div class="item-price" style="color:#1976D2;">+1🍪</div>
@@ -1187,7 +1247,7 @@
                     </div>`;
                 } else {
                     invHtml += `
-                    <div class="item-card" style="border-color:#FFB300; background:#FFFDE7;" onclick="openInvItem('${gk}')">
+                    <div class="item-card" style="cursor:default;">
                         <div class="item-icon">${iconHtml(item.i, '🎁')}</div>
                         <div class="item-name">${item.n}</div>
                         <div class="item-price" style="color:#F57F17; font-size:12px;">사용 요청</div>
@@ -1196,7 +1256,7 @@
                 }
             });
 
-            invGrid.innerHTML = invHtml;
+            invGrid.innerHTML = cookieCard + invHtml;
         }
 // ==========================================
         // 예쁜 확인 팝업창 제어 로직
@@ -1236,14 +1296,15 @@
             const price = parseInt(priceValue) || 0;
             const displayAmt = price > 0 ? `-${price}` : `+${Math.abs(price)}`;
             const color = price > 0 ? '#E53935' : '#4CAF50';
-            const writeOrder = async (cookiePaid, couponIdxUsed) => {
+            const writeOrder = async (cookiePaid, couponIdxUsed, qty) => {
+                qty = qty || 1;
                 const oid = 'o' + Date.now();
                 const shopKey = (couponIdxUsed && couponIdxUsed.length) ? findShopKey(currentBuyerCode) : null;
                 const order = {
                     id: oid, boothId: 'kiosk', boothName: '🖥️ 키오스크',
                     buyerCode: currentBuyerCode, buyerName: st.name, buyerNo: st.no,
                     itemName: itemName, emoji: icon,
-                    price: price, qty: 1, total: price,
+                    price: price, qty, total: price*qty,
                     cookiePaid, couponsUsed: (couponIdxUsed||[]).length, couponIdx: couponIdxUsed||[],
                     status: 'pending', paid: true, timestamp: Date.now()
                 };
@@ -1257,13 +1318,13 @@
             };
 
             if (price > 0) {
-                // 쿠키/이용권 결제 모달
-                openPayment({ code: currentBuyerCode, total: price, icon, title: itemName, onPay: writeOrder });
+                // 쿠키/이용권 결제 모달 (개수 선택 가능)
+                openPayment({ code: currentBuyerCode, unit: price, allowQty: true, icon, title: itemName, onPay: writeOrder });
             } else {
                 // 적립(+쿠키) 등은 이용권 불필요 → 바로 접수
                 showConfirmModal(icon, "주문을 접수할까요?",
                     `<span style="color:#FF6F00; font-size:26px;">[${itemName}]</span><br>금액: <b style="color:${color};">${displayAmt} 쿠키</b>`,
-                    () => writeOrder(price, []));
+                    () => writeOrder(price, [], 1));
             }
         }
 
@@ -2029,9 +2090,8 @@
             } catch(e){ alert('부스 저장 실패'); }
         }
         function deleteBooth(id) {
-            showPasswordModal("부스를 삭제합니다.<br><b style='color:#E65100'>교사 비밀번호</b>를 입력하세요.", (pw)=>{
-                if(!adminPwOk(pw)) return alert('비밀번호가 일치하지 않습니다.');
-                showConfirmModal('🗑️','부스를 삭제할까요?','메뉴와 미정산 주문도 함께 사라져요.', async ()=>{
+            {
+                showConfirmModal('🗑️','부스를 삭제할까요?','메뉴와 주문도 함께 사라져요.', async ()=>{
                     const updates = {};
                     updates[`kiosk_booths/${id}`] = null;
                     updates[`kiosk_booth_items/${id}`] = null;
@@ -2041,7 +2101,7 @@
                     await window.dbUpdate(window.dbPath(window.db), updates);
                     showBoothList();
                 });
-            });
+            }
         }
 
         // ---- 부스 운영 화면 ----
@@ -2236,28 +2296,28 @@
             const b = boothsData[boothId];
             const it = (boothItems[boothId] || {})[itemId];
             if (!st || !b || !it) return;
-            const total = it.price || 0;
             const tracked = it.stock != null;
             if (tracked && it.stock <= 0) {   // 재고 소진
                 return showConfirmModal('📦', '재고가 없어요', `${it.name}은(는) 품절됐어요.`, closeConfirmModal);
             }
             openPayment({
-                code: st.code, total, icon: it.emoji||'🍬', title: `${b.name} · ${it.name}`,
-                onPay: async (cookiePaid, couponIdxUsed) => {
+                code: st.code, unit: it.price||0, allowQty: true, stockMax: tracked ? it.stock : Infinity,
+                icon: it.emoji||'🍬', title: `${b.name} · ${it.name}`,
+                onPay: async (cookiePaid, couponIdxUsed, qty) => {
                     const oid = 'o' + Date.now();
                     const shopKey = couponIdxUsed.length ? findShopKey(st.code) : null;
                     const order = {
                         id: oid, boothId: b.id, boothName: b.name,
                         buyerCode: st.code, buyerName: st.name, buyerNo: st.no,
                         itemName: it.name||'상품', emoji: it.emoji||'🍬', itemId: it.id,
-                        price: it.price||0, qty: 1, total,
+                        price: it.price||0, qty, total: (it.price||0)*qty,
                         cookiePaid, couponsUsed: couponIdxUsed.length, couponIdx: couponIdxUsed,
                         status: 'pending', paid: true, stockTracked: tracked, timestamp: Date.now()
                     };
                     try {
                         const updates = { [`kiosk_orders/${oid}`]: order };
                         Object.assign(updates, shopUsedUpdate(st.code, cookiePaid));
-                        if (tracked) updates[`kiosk_booth_items/${b.id}/${it.id}/stock`] = window.dbIncrement(-1);
+                        if (tracked) updates[`kiosk_booth_items/${b.id}/${it.id}/stock`] = window.dbIncrement(-qty);
                         if (shopKey) couponIdxUsed.forEach(idx => updates[`ClassData/EventShop/stu/${shopKey}/inv/${idx}/st`] = 'used');
                         await window.dbUpdate(window.dbPath(window.db), updates);
                         closeModal('purchaseModal');
@@ -2275,7 +2335,7 @@
             const total = lines.reduce((s,l)=>s+(l.it.price||0)*l.qty,0);
 
             openPayment({
-                code: st.code, total, icon: '🧾', title: `${st.name} 주문`,
+                code: st.code, unit: total, allowQty: false, icon: '🧾', title: `${st.name} 주문`,
                 onPay: async (cookiePaid, couponIdxUsed) => {
                     const base = Date.now();
                     const updates = {};
@@ -2317,52 +2377,79 @@
             }
             return null;
         }
-        // 학생의 사용 가능한 '상점 이용권' 인벤토리 조회 → {shopKey, indices[], count}
+        // 결제에 쓸 수 있는 인벤토리를 종류별로 조회 → {shopKey, voucher[], monday[]}
         function getCouponInfo(code){
             const sk = findShopKey(code);
-            if (sk == null) return { shopKey:null, indices:[], count:0 };
+            if (sk == null) return { shopKey:null, voucher:[], monday:[] };
             const inv = (shopStudents[sk]||{}).inv || {};
-            const indices = Object.keys(inv).filter(idx => inv[idx] && inv[idx].st==='active' && String(inv[idx].n||'').includes('상점 이용권'));
-            return { shopKey:sk, indices, count:indices.length };
+            const voucher = [], monday = [];
+            Object.keys(inv).forEach(idx => {
+                const it = inv[idx];
+                if (!it || it.st !== 'active') return;
+                const nm = String(it.n||'').replace(/\s/g,'');   // 공백 무시 매칭
+                if (nm.includes('상점이용권')) voucher.push(idx);
+                else if (nm.includes('월요쿠키') && !it.locked) monday.push(idx);
+            });
+            return { shopKey:sk, voucher, monday };
         }
 
-        // 💳 결제 모달 — total🍪를 가방 쿠키 + 상점 이용권(1:1)으로 결제
-        // ctx: { code, total, icon, title, onPay(cookiePaid, couponIdxUsed) }
+        // 💳 결제 모달 — (단가×개수)🍪를 가방 쿠키 + 이용권/월요쿠키(1:1)로 결제
+        // ctx: { code, unit, icon, title, allowQty, stockMax, onPay(cookiePaid, couponIdxUsed, qty) }
         let _payCtx = null;
         function openPayment(ctx){
             _payCtx = ctx;
-            const avail = shopAvail(ctx.code);          // 가방 가용 쿠키(없으면 null)
+            _payCtx.qty = 1;
+            _payCtx.stockMax = (ctx.stockMax==null ? Infinity : ctx.stockMax);
+            const avail = shopAvail(ctx.code);
             const coup = getCouponInfo(ctx.code);
-            _payCtx.couponIndices = coup.indices;
-            _payCtx.availNum = (avail == null ? Infinity : avail);  // 미등록(=null)은 차감 안 되므로 제한 없음 취급
-            _payCtx.couponMax = Math.min(coup.count, ctx.total);    // 가격 이상으로는 이용권 불필요
+            _payCtx.voucherIdx = coup.voucher;
+            _payCtx.mondayIdx = coup.monday;
+            _payCtx.availNum = (avail == null ? Infinity : avail);
             document.getElementById('payIcon').innerHTML = ctx.icon || '🛒';
             document.getElementById('payTitle').innerText = ctx.title || '결제';
-            document.getElementById('payPrice').innerText = ctx.total;
             document.getElementById('payAvail').innerText = (avail == null ? '–' : avail);
             document.getElementById('payAvailOk').innerHTML = (avail == null) ? '<span style="color:#E53935;font-size:13px;">(상점 미등록)</span>' : '';
-            document.getElementById('payCouponMax').innerText = coup.count;
-            document.getElementById('payCouponRow').style.display = coup.count > 0 ? 'block' : 'none';
-            document.getElementById('payCoupon').value = 0;
-            updatePayInfo();
+            document.getElementById('payVoucherMax').innerText = coup.voucher.length;
+            document.getElementById('payMondayMax').innerText = coup.monday.length;
+            document.getElementById('payQtyRow').style.display = ctx.allowQty ? 'block' : 'none';
+            document.getElementById('payQty').value = 1;
+            document.getElementById('payVoucher').value = 0;
+            document.getElementById('payMonday').value = 0;
+            recalcPay();
             document.getElementById('payModal').style.display = 'flex';
         }
-        function payCouponChange(d){
-            const el = document.getElementById('payCoupon');
-            el.value = Math.max(0, Math.min(_payCtx.couponMax, (parseInt(el.value)||0) + d));
-            updatePayInfo();
+        function payQtyChange(d){
+            _payCtx.qty = Math.max(1, Math.min(_payCtx.stockMax, _payCtx.qty + d));
+            document.getElementById('payQty').value = _payCtx.qty;
+            recalcPay();
         }
-        function payCouponInput(){
-            const el = document.getElementById('payCoupon');
-            el.value = Math.max(0, Math.min(_payCtx.couponMax, parseInt(el.value)||0));
-            updatePayInfo();
+        function payQtyInput(){
+            _payCtx.qty = Math.max(1, Math.min(_payCtx.stockMax, parseInt(document.getElementById('payQty').value)||1));
+            document.getElementById('payQty').value = _payCtx.qty;
+            recalcPay();
         }
-        function updatePayInfo(){
-            const coupons = Math.max(0, Math.min(_payCtx.couponMax, parseInt(document.getElementById('payCoupon').value)||0));
-            const cookiePaid = _payCtx.total - coupons;
+        function payCouponChange(kind, d){
+            const el = document.getElementById(kind==='voucher' ? 'payVoucher' : 'payMonday');
+            el.value = Math.max(0, (parseInt(el.value)||0) + d);
+            recalcPay();
+        }
+        function payCouponInput(){ recalcPay(); }
+        function recalcPay(){
+            const total = _payCtx.unit * _payCtx.qty;
+            _payCtx.total = total;
+            const vEl = document.getElementById('payVoucher'), mEl = document.getElementById('payMonday');
+            // 이용권 먼저 클램프(보유·총액), 월요 쿠키는 남은 총액까지
+            let v = Math.max(0, Math.min(_payCtx.voucherIdx.length, total, parseInt(vEl.value)||0));
+            let m = Math.max(0, Math.min(_payCtx.mondayIdx.length, total - v, parseInt(mEl.value)||0));
+            vEl.value = v; mEl.value = m;
+            const coupons = v + m;
+            const cookiePaid = total - coupons;
             const enough = cookiePaid <= _payCtx.availNum;
+            document.getElementById('payPrice').innerText = total;
+            document.getElementById('payVoucherRow').style.display = _payCtx.voucherIdx.length > 0 ? 'block' : 'none';
+            document.getElementById('payMondayRow').style.display = _payCtx.mondayIdx.length > 0 ? 'block' : 'none';
             document.getElementById('payInfo').innerHTML =
-                `🎟️ 이용권 ${coupons}개 + 🍪 ${cookiePaid}개로 결제` +
+                `🎟️ ${v}개 + 🌞 ${m}개 + 🍪 ${cookiePaid}개로 결제` +
                 (enough ? '' : `<br><span style="color:#E53935;font-size:14px;">⚠️ 쿠키가 부족해요</span>`);
             const btn = document.getElementById('payConfirmBtn');
             btn.disabled = !enough;
@@ -2370,13 +2457,16 @@
         }
         function confirmPayment(){
             if(!_payCtx) return;
-            const coupons = Math.max(0, Math.min(_payCtx.couponMax, parseInt(document.getElementById('payCoupon').value)||0));
-            const cookiePaid = _payCtx.total - coupons;
-            if (cookiePaid > _payCtx.availNum) return; // 버튼 비활성이지만 안전장치
-            const couponIdxUsed = _payCtx.couponIndices.slice(0, coupons);
+            const total = _payCtx.total;
+            let v = Math.max(0, Math.min(_payCtx.voucherIdx.length, total, parseInt(document.getElementById('payVoucher').value)||0));
+            let m = Math.max(0, Math.min(_payCtx.mondayIdx.length, total - v, parseInt(document.getElementById('payMonday').value)||0));
+            const cookiePaid = total - (v + m);
+            if (cookiePaid > _payCtx.availNum) return;
+            const couponIdxUsed = _payCtx.voucherIdx.slice(0, v).concat(_payCtx.mondayIdx.slice(0, m));
+            const qty = _payCtx.qty;
             const cb = _payCtx.onPay;
             closeModal('payModal');
-            cb(cookiePaid, couponIdxUsed);
+            cb(cookiePaid, couponIdxUsed, qty);
         }
 
         // 구입/환불 즉시 이벤트 상점 가방 쿠키 반영(shopUsed 증감). 학생 없으면 빈 객체.
@@ -2409,17 +2499,29 @@
 
         // ---- 구매 내역 (학생별 정렬) ----
         function setBoothFilter(v){ boothFilter = v; renderOrders(); }
+        // 🧾 구매 내역 초기화 (정산 완료분 기록 비우기)
+        function resetOrders() {
+            if (!window._isTeacher) return;   // 학생 부스 기기에선 초기화 불가
+            const ids = Object.keys(ordersData || {});
+            if (ids.length === 0) return showInfo('🧾', '비어 있어요', '초기화할 구매 내역이 없습니다.');
+            showConfirmModal('🧾', '구매 내역을 초기화할까요?',
+                `현재 <b style="color:#E65100;">${ids.length}건</b>의 구매 내역을 모두 지워요.<br><span style="font-size:14px;color:#888;">쿠키는 이미 결제 완료되어 그대로예요.</span>`,
+                async ()=>{
+                    const updates = {};
+                    ids.forEach(id=> updates[`kiosk_orders/${id}`] = null);
+                    try { await window.dbUpdate(window.dbPath(window.db), updates); }
+                    catch(e){ alert('초기화 실패'); }
+                });
+        }
         function renderOrders() {
             const list = document.getElementById('orderList');
             if (!list) return;
-            let orders = Object.values(ordersData);
+            let orders = Object.values(ordersData).filter(o=> boothFilter==='all' || o.boothId===boothFilter);
             // 학생별 그룹 (번호순)
             const byBuyer = {};
             orders.forEach(o=>{ (byBuyer[o.buyerCode] = byBuyer[o.buyerCode]||[]).push(o); });
-            const buyerCodes = Object.keys(byBuyer).sort((a,b)=>{
-                const na = parseInt((usersData[a]||{}).no)||999, nb = parseInt((usersData[b]||{}).no)||999;
-                return na-nb;
-            });
+            const sumOf = code => byBuyer[code].reduce((s,o)=>s+o.total,0);
+            const buyerCodes = Object.keys(byBuyer).sort((a,b)=> sumOf(b) - sumOf(a)); // 금액 많은 순
             if (buyerCodes.length === 0) { list.innerHTML = `<div style="text-align:center;color:#bbb;padding:40px;">주문이 없습니다.</div>`; return; }
             // 학생 이름별로 1줄: 합계만 표시, 클릭 시 상세 창
             list.innerHTML = buyerCodes.map(code=>{
@@ -2428,7 +2530,7 @@
                 const pendingSum = ords.reduce((s,o)=>s+o.total,0);
                 const cnt = ords.length;
                 return `<div class="ord-student-row" onclick="openStudentOrders('${code}')">
-                    <div class="ord-student-name">🧒 ${st.name||o_name(code)}</div>
+                    <div class="ord-student-name">${st.name||o_name(code)}</div>
                     <div class="ord-student-right">
                         <span class="ord-student-cnt">${cnt}건</span>
                         <span class="ord-student-sum">${pendingSum} 🍪</span>
@@ -2454,9 +2556,8 @@
                 .sort((a,b)=>a.timestamp-b.timestamp);
             if (ords.length === 0) { closeModal('studentOrdersModal'); return; }
             const sum = ords.reduce((s,o)=>s+o.total,0);
-            const a = shopAvail(code);
-            document.getElementById('soTitle').innerHTML = `🧒 ${st.no?st.no+'. ':''}${st.name||o_name(code)}`;
-            document.getElementById('soSub').innerHTML = `보류 ${ords.length}건 · 합계 <b style="color:#E65100">${sum} 🍪</b>` + (a!=null?` · 가방 쿠키 ${a}🍪`:'');
+            document.getElementById('soTitle').innerHTML = `${st.name||o_name(code)}`;
+            document.getElementById('soSub').innerHTML = `합계 <b style="color:#E65100">${sum} 🍪</b>`;
             document.getElementById('soBody').innerHTML = ords.map(o=>`
                 <div class="ord-row">
                     <div style="flex:1;"><b>${o.emoji||''} ${o.itemName}</b> x${o.qty} <span style="color:#888;font-size:12px;">· ${o.boothName}</span></div>
@@ -2530,12 +2631,23 @@
         }
         function refundOrder(id) {
             const o = ordersData[id]; if(!o) return;
-            showPasswordModal(`주문을 환불합니다.<br>${o.itemName} x${o.qty} (${o.total}🍪)<br><b style='color:#E65100'>교사 비밀번호</b>`, (pw)=>{
+            const cookieBack = (o.cookiePaid != null ? o.cookiePaid : o.total); // 실제 차감된 쿠키만
+            const couponBack = o.couponsUsed || (o.couponIdx ? o.couponIdx.length : 0);
+            showPasswordModal(`주문을 환불합니다.<br>${o.emoji||''} ${o.itemName} x${o.qty} (${o.total}🍪)<br><b style='color:#E65100'>교사 비밀번호</b>`, (pw)=>{
                 if(!adminPwOk(pw)) return alert('비밀번호가 일치하지 않습니다.');
-                showConfirmModal('↩️','환불할까요?', `주문을 취소하고 ${o.total}🍪를 가방에 돌려줘요.`, async ()=>{
-                    // 구입 시 차감했으므로 환불 시 shopUsed 복구
+                showConfirmModal('↩️','환불할까요?', `🍪${cookieBack}${couponBack?` + 사용한 아이템 ${couponBack}개`:''}를 그대로 돌려줘요.`, async ()=>{
                     const updates = { [`kiosk_orders/${id}`]: null };
-                    if (o.paid) Object.assign(updates, shopUsedUpdate(o.buyerCode, -o.total));
+                    // 쿠키는 실제 차감분만 복구 (이용권/월요쿠키로 낸 부분은 쿠키로 환산하지 않음)
+                    if (o.paid) Object.assign(updates, shopUsedUpdate(o.buyerCode, -cookieBack));
+                    // 사용한 상점 이용권·월요 쿠키를 아이템 그대로 복구
+                    if (o.couponIdx && o.couponIdx.length) {
+                        const sk = findShopKey(o.buyerCode);
+                        if (sk != null) o.couponIdx.forEach(idx => updates[`ClassData/EventShop/stu/${sk}/inv/${idx}/st`] = 'active');
+                    }
+                    // 재고 한정 상품이면 재고 복구
+                    if (o.stockTracked && o.itemId && (boothItems[o.boothId]||{})[o.itemId]) {
+                        updates[`kiosk_booth_items/${o.boothId}/${o.itemId}/stock`] = window.dbIncrement(o.qty||0);
+                    }
                     try { await window.dbUpdate(window.dbPath(window.db), updates); }
                     catch(e){ alert('환불 실패'); }
                 });
@@ -2592,21 +2704,24 @@
             const bar = document.getElementById('boothStatusBar');
             if (!bar) return;
             const booths = Object.values(boothsData).sort((a,b)=>(a.createdAt||0)-(b.createdAt||0));
-            // 보류 합계(실시간 주문)
-            const pendingByBooth = {};
-            Object.values(ordersData).forEach(o=>{ pendingByBooth[o.boothId] = (pendingByBooth[o.boothId]||0) + o.total; });
+            // 매출 = 자동 반영(현재 주문) + 과거 정산분(있으면). 정산 단계가 없어졌으므로 주문 합계가 곧 매출.
+            const salesByBooth = {}, cntByBooth = {};
+            Object.values(ordersData).forEach(o=>{
+                salesByBooth[o.boothId] = (salesByBooth[o.boothId]||0) + o.total;
+                cntByBooth[o.boothId] = (cntByBooth[o.boothId]||0) + (o.qty||1);
+            });
             if (booths.length === 0) { bar.innerHTML = `<div class="booth-status-empty">아직 개설된 부스가 없습니다.</div>`; return; }
-            const maxSettled = Math.max(1, ...booths.map(b=>(boothStats[b.id]||{}).settled||0));
-            const topId = booths.reduce((t,b)=> ((boothStats[b.id]||{}).settled||0) > ((boothStats[t]||{}).settled||0) ? b.id : t, booths[0].id);
+            const salesOf = b => (salesByBooth[b.id]||0) + ((boothStats[b.id]||{}).settled||0);
+            const topId = booths.reduce((t,b)=> salesOf(b) > salesOf(boothsData[t]||{id:t}) ? b.id : t, booths[0].id);
             bar.innerHTML = booths.map(b=>{
-                const a = boothStats[b.id] || {};
-                const settled = a.settled||0, cnt = a.count||0, pending = pendingByBooth[b.id]||0;
-                const crown = (b.id===topId && settled>0) ? '👑 ' : '';
+                const sales = salesOf(b);
+                const cnt = (cntByBooth[b.id]||0) + ((boothStats[b.id]||{}).count||0);
+                const crown = (b.id===topId && sales>0) ? '👑 ' : '';
                 const openBadge = b.open ? `<span class="booth-stat-open">● 영업중</span>` : `<span class="booth-stat-off">● 준비중</span>`;
                 return `<div class="booth-stat-card" style="background:${b.color||'#FFE0B2'}" onclick="showBoothHistory('${b.id}')">
                     <div class="booth-stat-name">${crown}${b.icon||'🏪'} ${b.name} ${openBadge}</div>
-                    <div class="booth-stat-amt">${settled} 🍪</div>
-                    ${pending?`<div class="booth-stat-sub">보류 ${pending}🍪</div>`:''}
+                    <div class="booth-stat-amt">${sales} 🍪</div>
+                    ${cnt?`<div class="booth-stat-sub">판매 ${cnt}개</div>`:''}
                 </div>`;
             }).join('');
         }
@@ -2614,7 +2729,7 @@
         // ---- 부스별 구매내역(보류 + 정산완료) 보기 ----
         async function showBoothHistory(boothId) {
             const b = boothsData[boothId] || {};
-            document.getElementById('boothHistTitle').innerHTML = `🧾 ${b.icon||'🏪'} ${b.name||''} 구매내역`;
+            document.getElementById('boothHistTitle').innerHTML = `${b.icon||'🏪'} ${b.name||''} 구매내역`;
             const body = document.getElementById('boothHistBody');
             document.getElementById('boothHistSub').innerText = '불러오는 중…';
             body.innerHTML = '';
@@ -2628,72 +2743,59 @@
             } catch(e) {}
 
             const rows = [...pending, ...archived];
-            const pendSum = pending.reduce((s,o)=>s+o.total,0);
-            const settledSum = archived.reduce((s,o)=>s+o.total,0);
+            const totalSum = rows.reduce((s,o)=>s+o.total,0);
             document.getElementById('boothHistSub').innerHTML =
-                `완료 <b style="color:#E65100;">${settledSum}🍪</b> · 보류 <b style="color:#FB8C00;">${pendSum}🍪</b> · 총 ${rows.length}건`;
+                `총 매출 <b style="color:#E65100;">${totalSum}🍪</b> · ${rows.length}건`;
 
             // 환불·정렬용 상태 저장(현재 부스 + 주문 목록)
             window._histBooth = boothId;
             window._histRows = rows;
             window._histMap = {};
             rows.forEach(o=> window._histMap[o.id] = o);
-            renderBoothHist(window._histSort || 'time');
+            renderBoothHist(window._histSort || 'student');
         }
 
         function setHistSort(mode){ window._histSort = mode; renderBoothHist(mode); }
 
         function _histRow(o){
-            const done = o.status==='settled';
-            const badge = done
-                ? `<span style="font-size:12px;font-weight:800;color:#2E7D32;background:#E8F5E9;border-radius:8px;padding:3px 8px;">완료</span>`
-                : `<span style="font-size:12px;font-weight:800;color:#E65100;background:#FFF3E0;border-radius:8px;padding:3px 8px;">보류</span>`;
             return `<div style="display:flex; align-items:center; gap:10px; padding:10px 6px; border-bottom:1px solid #F0F0F0;">
                 <div style="font-size:22px;">${o.emoji||'🍬'}</div>
                 <div style="flex:1; min-width:0;">
                     <div style="font-weight:800; color:#3E2723;">${o.itemName||'상품'} ×${o.qty||1}</div>
-                    <div style="font-size:13px; color:#888;">${o.buyerNo?o.buyerNo+'. ':''}${o.buyerName||''}</div>
+                    <div style="font-size:13px; color:#888;">${o.buyerName||''}</div>
                 </div>
                 <div style="font-weight:900; color:#E53935;">${o.total} 🍪</div>
-                ${badge}
-                <button class="btn-refund" style="margin-left:4px;" onclick="refundFromHist('${o.id}')">환불</button>
             </div>`;
         }
 
         function renderBoothHist(mode){
+            if (mode === 'time') mode = 'student';
             const body = document.getElementById('boothHistBody');
             const rows = window._histRows || [];
             const tab = (m,label)=>`<button onclick="setHistSort('${m}')" style="border:none;cursor:pointer;border-radius:14px;padding:6px 14px;font-weight:800;font-size:13px;${mode===m?'background:#FB8C00;color:#fff;':'background:#F0F0F0;color:#777;'}">${label}</button>`;
-            const toolbar = `<div style="display:flex; gap:8px; margin-bottom:12px;">${tab('time','시간순')}${tab('item','아이템별')}${tab('student','학생별')}</div>`;
+            const toolbar = `<div style="display:flex; gap:8px; margin-bottom:12px;">${tab('student','학생별')}${tab('item','아이템별')}</div>`;
             if (rows.length === 0) { body.innerHTML = toolbar + `<div style="text-align:center;color:#bbb;padding:30px;">구매내역이 없습니다.</div>`; return; }
 
-            let html = '';
-            if (mode === 'time') {
-                html = [...rows].sort((a,b)=>(b.timestamp||0)-(a.timestamp||0)).map(_histRow).join('');
-            } else {
-                // 그룹핑: 아이템별 or 학생별
-                const keyOf = mode==='item' ? (o=>o.itemName||'상품') : (o=> (o.buyerNo?o.buyerNo+'. ':'') + (o.buyerName||o.buyerCode||''));
-                const groups = {};
-                rows.forEach(o=>{ (groups[keyOf(o)] = groups[keyOf(o)] || []).push(o); });
-                html = Object.keys(groups).sort((a,b)=>{
-                    if (mode==='student') { const na=parseInt(a)||999, nb=parseInt(b)||999; return na-nb || a.localeCompare(b); }
-                    return groups[b].reduce((s,o)=>s+o.total,0) - groups[a].reduce((s,o)=>s+o.total,0);
-                }).map(k=>{
-                    const list = groups[k].sort((a,b)=>(b.timestamp||0)-(a.timestamp||0));
-                    const qty = list.reduce((s,o)=>s+(o.qty||0),0);
-                    const sum = list.reduce((s,o)=>s+o.total,0);
-                    const head = mode==='item'
-                        ? `${list[0].emoji||'🍬'} ${k}`
-                        : `🧒 ${k}`;
-                    return `<div style="margin-bottom:14px;">
-                        <div style="display:flex; justify-content:space-between; align-items:center; background:#FFF8E1; border-radius:10px; padding:8px 12px; font-weight:900; color:#5D4037;">
-                            <span>${head}</span>
-                            <span style="color:#E65100;">${qty}개 · ${sum}🍪</span>
-                        </div>
-                        ${list.map(_histRow).join('')}
-                    </div>`;
-                }).join('');
-            }
+            // 그룹핑: 아이템별 or 학생별
+            const keyOf = mode==='item' ? (o=>o.itemName||'상품') : (o=> (o.buyerName||o.buyerCode||''));
+            const groups = {};
+            rows.forEach(o=>{ (groups[keyOf(o)] = groups[keyOf(o)] || []).push(o); });
+            const html = Object.keys(groups).sort((a,b)=>{
+                if (mode==='student') return a.localeCompare(b);
+                return groups[b].reduce((s,o)=>s+o.total,0) - groups[a].reduce((s,o)=>s+o.total,0);
+            }).map(k=>{
+                const list = groups[k].sort((a,b)=>(b.timestamp||0)-(a.timestamp||0));
+                const qty = list.reduce((s,o)=>s+(o.qty||0),0);
+                const sum = list.reduce((s,o)=>s+o.total,0);
+                const head = mode==='item' ? `${list[0].emoji||'🍬'} ${k}` : `${k}`;
+                return `<div style="margin-bottom:14px;">
+                    <div style="display:flex; justify-content:space-between; align-items:center; background:#FFF8E1; border-radius:10px; padding:8px 12px; font-weight:900; color:#5D4037;">
+                        <span>${head}</span>
+                        <span style="color:#E65100;">${qty}개 · ${sum}🍪</span>
+                    </div>
+                    ${list.map(_histRow).join('')}
+                </div>`;
+            }).join('');
             body.innerHTML = toolbar + html;
         }
 

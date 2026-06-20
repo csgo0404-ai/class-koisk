@@ -898,22 +898,33 @@
                 renderAdminItems();
             });
 
-            // 🎒 이벤트 상점 가방 데이터 연동 감시
-            window.dbOnValue(window.dbPath(window.db, 'ClassData/EventShop/stu'), (snap) => {
-                shopStudents = snap.val() || {};
-                window._shopLoaded = true;  // 상점 데이터 도착 → 이제 정확한 가방 쿠키로 렌더
-                renderStudents();           // 가방 쿠키 변동 → 학생 카드 갱신
+            // 🏪 부스마켓 역할 판별: ?booth=ID 로 들어오면 학생(부스 운영) 기기로 간주
+            const params = new URLSearchParams(location.search);
+            const bid = params.get('booth');
+            window._isTeacher = !bid;   // 바로가기 링크가 없으면 교사 기기
+
+            // 🎒 가방 쿠키 데이터: 교사=stu 전체 구독(+미러 기록), 학생=kiosk_wallet 슬림 구독
+            const _onShopData = () => {
+                window._shopLoaded = true;
+                renderStudents();
                 updateModalCookieUI();
                 renderKioskBoothStatus();
                 if(document.getElementById('purchaseModal').style.display === 'flex' && currentBuyerCode) {
                     renderInventoryGrid(currentBuyerCode);
                 }
-            });
-
-            // 🏪 부스마켓 역할 판별: ?booth=ID 로 들어오면 학생(부스 운영) 기기로 간주
-            const params = new URLSearchParams(location.search);
-            const bid = params.get('booth');
-            window._isTeacher = !bid;   // 바로가기 링크가 없으면 교사 기기
+            };
+            if (window._isTeacher) {
+                window.dbOnValue(window.dbPath(window.db, 'ClassData/EventShop/stu'), (snap) => {
+                    shopStudents = snap.val() || {};
+                    writeWalletMirror(shopStudents);   // 교사 기기가 경량 미러 유지(자가 치유)
+                    _onShopData();
+                });
+            } else {
+                window.dbOnValue(window.dbPath(window.db, 'kiosk_wallet'), (snap) => {
+                    shopStudents = buildShopStudentsFromWallet(snap.val() || {});  // 미러→합성
+                    _onShopData();
+                });
+            }
 
             // 💡 [트래픽 절감] 다했니 쿠키 동기화는 교사 기기에서만 1분 주기로 실행
             //    (학생 기기는 kiosk_users 리스너로 잔액을 읽기만 함)
@@ -1296,22 +1307,26 @@
             const price = parseInt(priceValue) || 0;
             const displayAmt = price > 0 ? `-${price}` : `+${Math.abs(price)}`;
             const color = price > 0 ? '#E53935' : '#4CAF50';
-            const writeOrder = async (cookiePaid, couponIdxUsed, qty) => {
+            const writeOrder = async (cookiePaid, qty, vUsed, mUsed) => {
                 qty = qty || 1;
+                const res = await resolveCouponSlots(currentBuyerCode, vUsed||0, mUsed||0);
+                const shopKey = res.k;
+                const couponIdx = res.voucherIdx.concat(res.mondayIdx);
                 const oid = 'o' + Date.now();
-                const shopKey = (couponIdxUsed && couponIdxUsed.length) ? findShopKey(currentBuyerCode) : null;
                 const order = {
                     id: oid, boothId: 'kiosk', boothName: '🖥️ 키오스크',
                     buyerCode: currentBuyerCode, buyerName: st.name, buyerNo: st.no,
                     itemName: itemName, emoji: icon,
                     price: price, qty, total: price*qty,
-                    cookiePaid, couponsUsed: (couponIdxUsed||[]).length, couponIdx: couponIdxUsed||[],
+                    cookiePaid, couponsUsed: couponIdx.length, couponIdx,
+                    voucherUsed: res.voucherIdx.length, mondayUsed: res.mondayIdx.length,
                     status: 'pending', paid: true, timestamp: Date.now()
                 };
                 try {
                     const updates = { [`kiosk_orders/${oid}`]: order };
                     Object.assign(updates, shopUsedUpdate(currentBuyerCode, cookiePaid));
-                    if (shopKey) (couponIdxUsed||[]).forEach(idx => updates[`ClassData/EventShop/stu/${shopKey}/inv/${idx}/st`] = 'used');
+                    Object.assign(updates, walletDelta(currentBuyerCode, cookiePaid, -res.voucherIdx.length, -res.mondayIdx.length));
+                    if (shopKey) couponIdx.forEach(idx => updates[`ClassData/EventShop/stu/${shopKey}/inv/${idx}/st`] = 'used');
                     await window.dbUpdate(window.dbPath(window.db), updates);
                     closeModal('purchaseModal');
                 } catch(e) { alert("처리 중 오류가 발생했습니다."); }
@@ -1324,7 +1339,7 @@
                 // 적립(+쿠키) 등은 이용권 불필요 → 바로 접수
                 showConfirmModal(icon, "주문을 접수할까요?",
                     `<span style="color:#FF6F00; font-size:26px;">[${itemName}]</span><br>금액: <b style="color:${color};">${displayAmt} 쿠키</b>`,
-                    () => writeOrder(price, [], 1));
+                    () => writeOrder(price, 1, 0, 0));
             }
         }
 
@@ -2303,22 +2318,26 @@
             openPayment({
                 code: st.code, unit: it.price||0, allowQty: true, stockMax: tracked ? it.stock : Infinity,
                 icon: it.emoji||'🍬', title: `${b.name} · ${it.name}`,
-                onPay: async (cookiePaid, couponIdxUsed, qty) => {
+                onPay: async (cookiePaid, qty, vUsed, mUsed) => {
+                    const res = await resolveCouponSlots(st.code, vUsed, mUsed);
+                    const shopKey = res.k;
+                    const couponIdx = res.voucherIdx.concat(res.mondayIdx);
                     const oid = 'o' + Date.now();
-                    const shopKey = couponIdxUsed.length ? findShopKey(st.code) : null;
                     const order = {
                         id: oid, boothId: b.id, boothName: b.name,
                         buyerCode: st.code, buyerName: st.name, buyerNo: st.no,
                         itemName: it.name||'상품', emoji: it.emoji||'🍬', itemId: it.id,
                         price: it.price||0, qty, total: (it.price||0)*qty,
-                        cookiePaid, couponsUsed: couponIdxUsed.length, couponIdx: couponIdxUsed,
+                        cookiePaid, couponsUsed: couponIdx.length, couponIdx,
+                        voucherUsed: res.voucherIdx.length, mondayUsed: res.mondayIdx.length,
                         status: 'pending', paid: true, stockTracked: tracked, timestamp: Date.now()
                     };
                     try {
                         const updates = { [`kiosk_orders/${oid}`]: order };
                         Object.assign(updates, shopUsedUpdate(st.code, cookiePaid));
+                        Object.assign(updates, walletDelta(st.code, cookiePaid, -res.voucherIdx.length, -res.mondayIdx.length));
                         if (tracked) updates[`kiosk_booth_items/${b.id}/${it.id}/stock`] = window.dbIncrement(-qty);
-                        if (shopKey) couponIdxUsed.forEach(idx => updates[`ClassData/EventShop/stu/${shopKey}/inv/${idx}/st`] = 'used');
+                        if (shopKey) couponIdx.forEach(idx => updates[`ClassData/EventShop/stu/${shopKey}/inv/${idx}/st`] = 'used');
                         await window.dbUpdate(window.dbPath(window.db), updates);
                         closeModal('purchaseModal');
                     } catch(e){ alert('주문 접수 실패'); }
@@ -2336,30 +2355,35 @@
 
             openPayment({
                 code: st.code, unit: total, allowQty: false, icon: '🧾', title: `${st.name} 주문`,
-                onPay: async (cookiePaid, couponIdxUsed) => {
+                onPay: async (cookiePaid, qty, vUsed, mUsed) => {
+                    const res = await resolveCouponSlots(st.code, vUsed, mUsed);   // 실제 슬롯 확정
+                    const shopKey = res.k;
                     const base = Date.now();
                     const updates = {};
-                    const shopKey = couponIdxUsed.length ? findShopKey(st.code) : null;
-                    // 이용권 사용분을 라인별로 분배(환불 정합) — 쿠키결제는 라인별로 비례 분배
-                    let coupLeft = couponIdxUsed.slice();
+                    // 이용권/월요쿠키를 라인별로 분배(환불 정합)
+                    let vp = 0, mp = 0;
                     lines.forEach((l, i) => {
                         const oid = 'o' + (base + i);
                         const lineTotal = (l.it.price||0)*l.qty;
-                        const lineCoupons = coupLeft.splice(0, Math.min(coupLeft.length, lineTotal));
-                        const lineCookie = lineTotal - lineCoupons.length;
+                        const lv = Math.min(res.voucherIdx.length - vp, lineTotal);
+                        const lm = Math.min(res.mondayIdx.length - mp, lineTotal - lv);
+                        const lineIdx = res.voucherIdx.slice(vp, vp+lv).concat(res.mondayIdx.slice(mp, mp+lm));
+                        vp += lv; mp += lm;
+                        const lineCookie = lineTotal - (lv + lm);
                         const tracked = l.it.stock != null;
                         updates[`kiosk_orders/${oid}`] = {
                             id: oid, boothId: b.id, boothName: b.name,
                             buyerCode: st.code, buyerName: st.name, buyerNo: st.no,
                             itemName: l.it.name||'상품', emoji: l.it.emoji||'🍬', itemId: l.it.id,
                             price: l.it.price||0, qty: l.qty, total: lineTotal,
-                            cookiePaid: lineCookie, couponsUsed: lineCoupons.length, couponIdx: lineCoupons,
+                            cookiePaid: lineCookie, couponsUsed: lv+lm, couponIdx: lineIdx, voucherUsed: lv, mondayUsed: lm,
                             status: 'pending', paid: true, stockTracked: tracked, timestamp: base + i
                         };
                         if (tracked) updates[`kiosk_booth_items/${b.id}/${l.it.id}/stock`] = window.dbIncrement(-l.qty);
-                        if (shopKey) lineCoupons.forEach(idx => updates[`ClassData/EventShop/stu/${shopKey}/inv/${idx}/st`] = 'used');
+                        if (shopKey) lineIdx.forEach(idx => updates[`ClassData/EventShop/stu/${shopKey}/inv/${idx}/st`] = 'used');
                     });
-                    Object.assign(updates, shopUsedUpdate(st.code, cookiePaid)); // 쿠키 결제분만 차감
+                    Object.assign(updates, shopUsedUpdate(st.code, cookiePaid));           // 쿠키 결제분 차감(stu)
+                    Object.assign(updates, walletDelta(st.code, cookiePaid, -vp, -mp));    // 미러 즉시 반영(학생기기)
                     try {
                         await window.dbUpdate(window.dbPath(window.db), updates);
                         saleCart = {};
@@ -2377,40 +2401,98 @@
             }
             return null;
         }
-        // 결제에 쓸 수 있는 인벤토리를 종류별로 조회 → {shopKey, voucher[], monday[]}
-        function getCouponInfo(code){
-            const sk = findShopKey(code);
-            if (sk == null) return { shopKey:null, voucher:[], monday:[] };
-            const inv = (shopStudents[sk]||{}).inv || {};
+        // inv에서 결제용 활성 슬롯(이용권/월요쿠키) 인덱스 추출
+        function _scanCouponInv(inv){
             const voucher = [], monday = [];
-            Object.keys(inv).forEach(idx => {
+            Object.keys(inv||{}).forEach(idx => {
                 const it = inv[idx];
                 if (!it || it.st !== 'active') return;
-                const nm = String(it.n||'').replace(/\s/g,'');   // 공백 무시 매칭
+                const nm = String(it.n||'').replace(/\s/g,'');
                 if (nm.includes('상점이용권')) voucher.push(idx);
                 else if (nm.includes('월요쿠키') && !it.locked) monday.push(idx);
             });
-            return { shopKey:sk, voucher, monday };
+            return { voucher, monday };
+        }
+        // 결제 모달용 보유 개수 — 교사(실 inv) 또는 학생(미러 _vc/_mc)
+        function getCouponInfo(code){
+            const sk = findShopKey(code);
+            if (sk == null) return { shopKey:null, voucherCount:0, mondayCount:0 };
+            const ent = shopStudents[sk] || {};
+            if (ent.inv) { const s = _scanCouponInv(ent.inv); return { shopKey:sk, voucherCount:s.voucher.length, mondayCount:s.monday.length }; }
+            return { shopKey:sk, voucherCount:(ent._vc||0), mondayCount:(ent._mc||0) };
+        }
+        // 결제/환불 쓰기 직전, 실제 inv에서 사용할 슬롯 인덱스 확정(학생 기기는 온디맨드 조회)
+        async function resolveCouponSlots(code, vUsed, mUsed){
+            const k = findShopKey(code);
+            const out = { k, voucherIdx:[], mondayIdx:[] };
+            if (k == null || (vUsed + mUsed) === 0) return out;
+            let inv = (shopStudents[k]||{}).inv;
+            if (!inv) {
+                try { const snap = await window.dbGet(window.dbPath(window.db, `ClassData/EventShop/stu/${k}/inv`)); inv = snap.val() || {}; } catch(_) { inv = {}; }
+            }
+            const s = _scanCouponInv(inv);
+            out.voucherIdx = s.voucher.slice(0, vUsed);
+            out.mondayIdx  = s.monday.slice(0, mUsed);
+            return out;
+        }
+        // 🪞 경량 지갑 미러: 교사 기기가 stu에서 계산해 기록(자가 치유). 변경분만 기록(해시 가드).
+        window._walletHash = window._walletHash || {};
+        function writeWalletMirror(realStu){
+            const updates = {};
+            for (const k in realStu){
+                const s = realStu[k]; if (!s || !s.cd) continue;
+                const sc = _scanCouponInv(s.inv);
+                const w = { k, ck:(s.cookie||0), uc:(s.usedCookie||0), su:(s.shopUsed||0), vc:sc.voucher.length, mc:sc.monday.length };
+                let h; try { h = JSON.stringify(w); } catch(_) { h = null; }
+                if (h != null && window._walletHash[s.cd] === h) continue;
+                updates[`kiosk_wallet/${s.cd}`] = w;
+                if (h != null) window._walletHash[s.cd] = h;
+            }
+            if (Object.keys(updates).length) { try { window.dbUpdate(window.dbPath(window.db), updates); } catch(_){} }
+        }
+        // 학생 기기: 결제/환불 즉시 미러(kiosk_wallet) 증감(교사 부재 중 즉시성). 교사는 stu 재계산으로 처리.
+        function walletDelta(code, suD, vcD, mcD){
+            if (window._isTeacher) return {};
+            const sk = findShopKey(code); if (sk == null) return {};
+            const cd = (shopStudents[sk]||{}).cd || code;
+            const u = {};
+            if (suD) u[`kiosk_wallet/${cd}/su`] = window.dbIncrement(suD);
+            if (vcD) u[`kiosk_wallet/${cd}/vc`] = window.dbIncrement(vcD);
+            if (mcD) u[`kiosk_wallet/${cd}/mc`] = window.dbIncrement(mcD);
+            return u;
+        }
+        // 미러(kiosk_wallet) → 합성 shopStudents(실 stu키로 키잉, inv 없음). 학생 기기 전용.
+        function buildShopStudentsFromWallet(wallet){
+            const out = {};
+            for (const cd in wallet){
+                const w = wallet[cd] || {}; const k = w.k || cd;
+                out[k] = { cd, cookie:(w.ck||0), usedCookie:(w.uc||0), shopUsed:(w.su||0), _vc:(w.vc||0), _mc:(w.mc||0) };
+            }
+            return out;
         }
 
         // 💳 결제 모달 — (단가×개수)🍪를 가방 쿠키 + 이용권/월요쿠키(1:1)로 결제
         // ctx: { code, unit, icon, title, allowQty, stockMax, onPay(cookiePaid, couponIdxUsed, qty) }
         let _payCtx = null;
         function openPayment(ctx){
+            // 학생 기기: 지갑(미러) 미로딩 상태면 무료 결제 방지
+            if (!window._isTeacher && shopAvail(ctx.code) == null) {
+                return showInfo('⏳', '잠시만요', '학생 지갑을 불러오는 중이거나 등록되지 않았어요.<br>잠시 후 다시 시도해 주세요.');
+            }
             _payCtx = ctx;
             _payCtx.qty = 1;
             _payCtx.stockMax = (ctx.stockMax==null ? Infinity : ctx.stockMax);
             const avail = shopAvail(ctx.code);
             const coup = getCouponInfo(ctx.code);
-            _payCtx.voucherIdx = coup.voucher;
-            _payCtx.mondayIdx = coup.monday;
+            _payCtx.voucherCount = coup.voucherCount;
+            _payCtx.mondayCount = coup.mondayCount;
             _payCtx.availNum = (avail == null ? Infinity : avail);
             document.getElementById('payIcon').innerHTML = ctx.icon || '🛒';
             document.getElementById('payTitle').innerText = ctx.title || '결제';
             document.getElementById('payAvail').innerText = (avail == null ? '–' : avail);
             document.getElementById('payAvailOk').innerHTML = (avail == null) ? '<span style="color:#E53935;font-size:13px;">(상점 미등록)</span>' : '';
-            document.getElementById('payVoucherMax').innerText = coup.voucher.length;
-            document.getElementById('payMondayMax').innerText = coup.monday.length;
+            document.getElementById('payVoucherMax').innerText = coup.voucherCount;
+            document.getElementById('payMondayMax').innerText = coup.mondayCount;
             document.getElementById('payQtyRow').style.display = ctx.allowQty ? 'block' : 'none';
             document.getElementById('payQty').value = 1;
             document.getElementById('payVoucher').value = 0;
@@ -2439,15 +2521,15 @@
             _payCtx.total = total;
             const vEl = document.getElementById('payVoucher'), mEl = document.getElementById('payMonday');
             // 이용권 먼저 클램프(보유·총액), 월요 쿠키는 남은 총액까지
-            let v = Math.max(0, Math.min(_payCtx.voucherIdx.length, total, parseInt(vEl.value)||0));
-            let m = Math.max(0, Math.min(_payCtx.mondayIdx.length, total - v, parseInt(mEl.value)||0));
+            let v = Math.max(0, Math.min(_payCtx.voucherCount, total, parseInt(vEl.value)||0));
+            let m = Math.max(0, Math.min(_payCtx.mondayCount, total - v, parseInt(mEl.value)||0));
             vEl.value = v; mEl.value = m;
             const coupons = v + m;
             const cookiePaid = total - coupons;
             const enough = cookiePaid <= _payCtx.availNum;
             document.getElementById('payPrice').innerText = total;
-            document.getElementById('payVoucherRow').style.display = _payCtx.voucherIdx.length > 0 ? 'block' : 'none';
-            document.getElementById('payMondayRow').style.display = _payCtx.mondayIdx.length > 0 ? 'block' : 'none';
+            document.getElementById('payVoucherRow').style.display = _payCtx.voucherCount > 0 ? 'block' : 'none';
+            document.getElementById('payMondayRow').style.display = _payCtx.mondayCount > 0 ? 'block' : 'none';
             document.getElementById('payInfo').innerHTML =
                 `🎟️ ${v}개 + 🌞 ${m}개 + 🍪 ${cookiePaid}개로 결제` +
                 (enough ? '' : `<br><span style="color:#E53935;font-size:14px;">⚠️ 쿠키가 부족해요</span>`);
@@ -2458,15 +2540,14 @@
         function confirmPayment(){
             if(!_payCtx) return;
             const total = _payCtx.total;
-            let v = Math.max(0, Math.min(_payCtx.voucherIdx.length, total, parseInt(document.getElementById('payVoucher').value)||0));
-            let m = Math.max(0, Math.min(_payCtx.mondayIdx.length, total - v, parseInt(document.getElementById('payMonday').value)||0));
+            let v = Math.max(0, Math.min(_payCtx.voucherCount, total, parseInt(document.getElementById('payVoucher').value)||0));
+            let m = Math.max(0, Math.min(_payCtx.mondayCount, total - v, parseInt(document.getElementById('payMonday').value)||0));
             const cookiePaid = total - (v + m);
             if (cookiePaid > _payCtx.availNum) return;
-            const couponIdxUsed = _payCtx.voucherIdx.slice(0, v).concat(_payCtx.mondayIdx.slice(0, m));
             const qty = _payCtx.qty;
             const cb = _payCtx.onPay;
             closeModal('payModal');
-            cb(cookiePaid, couponIdxUsed, qty);
+            cb(cookiePaid, qty, v, m);   // 개수 전달 — 실제 슬롯은 onPay에서 확정
         }
 
         // 구입/환불 즉시 이벤트 상점 가방 쿠키 반영(shopUsed 증감). 학생 없으면 빈 객체.
@@ -2644,6 +2725,10 @@
                         const sk = findShopKey(o.buyerCode);
                         if (sk != null) o.couponIdx.forEach(idx => updates[`ClassData/EventShop/stu/${sk}/inv/${idx}/st`] = 'active');
                     }
+                    // 미러 즉시 복구(학생기기) — 쿠키↓ 이용권/월요쿠키↑
+                    const vBack = o.voucherUsed != null ? o.voucherUsed : couponBack;
+                    const mBack = o.mondayUsed != null ? o.mondayUsed : 0;
+                    Object.assign(updates, walletDelta(o.buyerCode, -cookieBack, vBack, mBack));
                     // 재고 한정 상품이면 재고 복구
                     if (o.stockTracked && o.itemId && (boothItems[o.boothId]||{})[o.itemId]) {
                         updates[`kiosk_booth_items/${o.boothId}/${o.itemId}/stock`] = window.dbIncrement(o.qty||0);

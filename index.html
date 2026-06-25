@@ -652,7 +652,7 @@
 
             <div class="admin-section">
                 <h3>👥 학생 명단 관리</h3>
-                <textarea id="bulkInput" rows="3" placeholder="예: 1 홍길동 1001 (번호 이름 코드 순)" style="margin-bottom:10px;"></textarea>
+                <textarea id="bulkInput" rows="3" placeholder="예: 1 홍길동 남 1001 (번호 이름 성별 코드 순)" style="margin-bottom:10px;"></textarea>
                 <div style="display: flex; justify-content: space-between;">
                     <button class="btn-admin" onclick="bulkRegister()">조회 및 등록</button>
                     <button class="btn-admin btn-danger" onclick="resetStudents()">전체 삭제</button>
@@ -1611,13 +1611,28 @@
 
             const lines = input.split('\n');
             let updates = {};
+            const byNo = {};   // 이번 입력 내 같은 번호 중복 방지(번호→코드)
+            const errors = [];
+            const isGenderTok = (t) => /^(남|남자|여|여자)$/.test(String(t||'').trim());
 
             document.getElementById('bulkInput').placeholder = "데이터 연동 중... 잠시만 기다려주세요.";
 
             for(let line of lines) {
-                const parts = line.trim().split(/[\s,]+/);
+                const raw = line.trim();
+                if (!raw) continue;
+                const parts = raw.split(/[\s,]+/);
                 if(parts.length >= 3) {
-                    const no = parts[0], name = parts[1], code = parts[2];
+                    // 형식: 번호 이름 성별 코드  (3칸이면 번호 이름 코드 — 성별 생략)
+                    const no = parts[0], name = parts[1];
+                    let gRaw = '', code = '';
+                    if (parts.length >= 4){ gRaw = parts[2]; code = parts[3]; }
+                    else { code = parts[2]; }
+                    const gender = /^(남|남자|m|M)$/.test(gRaw.trim()) ? '남' : /^(여|여자|f|F|w|W)$/.test(gRaw.trim()) ? '여' : null;
+                    // 🛡️ 코드 자리에 성별(남/여)이 들어오면 형식 오류 → 절대 키로 쓰지 않음(데이터 붕괴 방지)
+                    if (isGenderTok(code)) {
+                        errors.push(`${raw}  → 코드 자리에 '${code}'(성별)이 있어요. '번호 이름 성별 코드' 순서로 입력하세요.`);
+                        continue;
+                    }
                     try {
                         const res = await fetch(`${BASE_URL}?code=${code}`, { headers: { "X-API-Key": API_KEY } });
                         const data = (await res.json()).data || {};
@@ -1625,21 +1640,42 @@
 
                         updates[`kiosk_users/${code}`] = {
                             no: no, name: data.name || name, code: code,
-                            cookie: data.cookie || 0, 
+                            gender: gender || existing.gender || null,
+                            cookie: data.cookie || 0,
                             usedCookie: data.usedCookie || 0,
                             spent: existing.spent || 0,
                             bonus: existing.bonus || 0,
                             highlight: existing.highlight || null
                         };
-                    } catch(e) { console.error(`${name} 조회 실패`, e); }
+                        // 재발 방지: 같은 번호의 '다른 코드' 기존 레코드는 삭제(중복 방지)
+                        Object.values(usersData).forEach(ex => {
+                            if (ex && ex.code != null && String(ex.code) !== String(code)
+                                && String(ex.no).trim() === String(no).trim()) {
+                                updates[`kiosk_users/${ex.code}`] = null;
+                            }
+                        });
+                        // 같은 입력(배치) 안에서 같은 번호가 또 나오면 앞선 코드 제거(마지막 줄 우선)
+                        const nk = String(no).trim();
+                        if (byNo[nk] && byNo[nk] !== String(code)) updates[`kiosk_users/${byNo[nk]}`] = null;
+                        byNo[nk] = String(code);
+                    } catch(e) { console.error(`${name} 조회 실패`, e); errors.push(`${raw}  → 다했니 조회 실패`); }
+                } else {
+                    errors.push(`${raw}  → 형식 오류(번호 이름 성별 코드)`);
                 }
             }
 
-            if(Object.keys(updates).length > 0) {
+            const writeCount = Object.keys(updates).filter(k => updates[k] !== null).length;
+            if(writeCount > 0) {
                 await window.dbUpdate(window.dbPath(window.db), updates);
-                alert("학생 연동 완료!");
-                document.getElementById('bulkInput').value = "";
             }
+            let msg = `학생 ${writeCount}명 연동 완료!`;
+            if (errors.length) {
+                msg += `\n\n⚠️ 처리하지 못한 줄 ${errors.length}개:\n- ` + errors.slice(0, 12).join('\n- ');
+                if (errors.length > 12) msg += `\n…외 ${errors.length - 12}개`;
+            }
+            alert(msg);
+            if (writeCount > 0) document.getElementById('bulkInput').value = "";
+            document.getElementById('bulkInput').placeholder = "예: 1 홍길동 남 1001 (번호 이름 성별 코드 순)";
         }
 
         async function syncAllCookiesSilent() {
@@ -1654,8 +1690,11 @@
                     if (res.ok) {
                         const data = (await res.json()).data || {};
                         if(data.cookie !== undefined) {
-                            updates[`kiosk_users/${code}/cookie`] = data.cookie;
-                            updates[`kiosk_users/${code}/usedCookie`] = data.usedCookie || 0;
+                            // 🔻 변경된 값만 기록 → 불필요한 Firebase 쓰기 방지(60초 주기여도 안전)
+                            const cur = usersData[code] || {};
+                            const nc = data.cookie, nu = data.usedCookie || 0;
+                            if (cur.cookie !== nc) updates[`kiosk_users/${code}/cookie`] = nc;
+                            if ((cur.usedCookie||0) !== nu) updates[`kiosk_users/${code}/usedCookie`] = nu;
                         }
                     }
                 } catch(e) {}

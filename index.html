@@ -1312,12 +1312,16 @@
                 const res = await resolveCouponSlots(currentBuyerCode, vUsed||0, mUsed||0);
                 const shopKey = res.k;
                 const couponIdx = res.voucherIdx.concat(res.mondayIdx);
+                // ⚠️ 모달 연 뒤 슬롯이 줄어 실제 확정된 쿠폰이 요청보다 적을 수 있음.
+                //    그 경우 부족분은 쿠키로 충당해야 무료 구매(과소차감)를 막음.
+                const total = price * qty;
+                if (price > 0) cookiePaid = total - couponIdx.length;
                 const oid = 'o' + Date.now();
                 const order = {
                     id: oid, boothId: 'kiosk', boothName: '🖥️ 키오스크',
                     buyerCode: currentBuyerCode, buyerName: st.name, buyerNo: st.no,
                     itemName: itemName, emoji: icon,
-                    price: price, qty, total: price*qty,
+                    price: price, qty, total,
                     cookiePaid, couponsUsed: couponIdx.length, couponIdx,
                     voucherUsed: res.voucherIdx.length, mondayUsed: res.mondayIdx.length,
                     status: 'pending', paid: true, timestamp: Date.now()
@@ -1469,6 +1473,10 @@
 
         // 💡 개별 완료 (좌/우 클릭 판별 추가)
         async function refundItem(logId, priceValue, code, itemName, isRightClick) {
+                // 🔒 쿠키가 오가는 처리 → 교사 비밀번호 확인(무인증 차감 방지)
+                const pw = prompt("완료(취소) 처리하려면 교사 비밀번호를 입력하세요.");
+                if (pw === null) return;
+                if (!adminPwOk(pw)) return alert("비밀번호가 일치하지 않습니다.");
                 const st = usersData[code];
                 const updates = {};
                 updates[`kiosk_history/${logId}`] = null; 
@@ -1515,6 +1523,10 @@
                 alert("선택된 내역이 없습니다. 체크박스를 선택해주세요.");
                 return;
             }
+            // 🔒 일괄 차감 처리 → 교사 비밀번호 확인
+            const pw = prompt("선택한 내역을 완료 처리하려면 교사 비밀번호를 입력하세요.");
+            if (pw === null) return;
+            if (!adminPwOk(pw)) return alert("비밀번호가 일치하지 않습니다.");
 
                 const updates = {};
                 const userUpdates = {};
@@ -2361,12 +2373,15 @@
                     const res = await resolveCouponSlots(st.code, vUsed, mUsed);
                     const shopKey = res.k;
                     const couponIdx = res.voucherIdx.concat(res.mondayIdx);
+                    // ⚠️ 슬롯 감소로 실제 확정 쿠폰이 요청보다 적으면 부족분은 쿠키로 충당(과소차감 방지)
+                    const total = (it.price||0)*qty;
+                    cookiePaid = total - couponIdx.length;
                     const oid = 'o' + Date.now();
                     const order = {
                         id: oid, boothId: b.id, boothName: b.name,
                         buyerCode: st.code, buyerName: st.name, buyerNo: st.no,
                         itemName: it.name||'상품', emoji: it.emoji||'🍬', itemId: it.id,
-                        price: it.price||0, qty, total: (it.price||0)*qty,
+                        price: it.price||0, qty, total,
                         cookiePaid, couponsUsed: couponIdx.length, couponIdx,
                         voucherUsed: res.voucherIdx.length, mondayUsed: res.mondayIdx.length,
                         status: 'pending', paid: true, stockTracked: tracked, timestamp: Date.now()
@@ -2421,8 +2436,11 @@
                         if (tracked) updates[`kiosk_booth_items/${b.id}/${l.it.id}/stock`] = window.dbIncrement(-l.qty);
                         if (shopKey) lineIdx.forEach(idx => updates[`ClassData/EventShop/stu/${shopKey}/inv/${idx}/st`] = 'used');
                     });
-                    Object.assign(updates, shopUsedUpdate(st.code, cookiePaid));           // 쿠키 결제분 차감(stu)
-                    Object.assign(updates, walletDelta(st.code, cookiePaid, -vp, -mp));    // 미러 즉시 반영(학생기기)
+                    // ⚠️ 실제 확정·분배된 쿠폰(vp+mp)만큼만 쿠폰 처리됐으므로,
+                    //    쿠키 차감분도 그에 맞춰 재계산(슬롯 감소 시 과소차감 방지).
+                    const realCookiePaid = total - (vp + mp);
+                    Object.assign(updates, shopUsedUpdate(st.code, realCookiePaid));       // 쿠키 결제분 차감(stu)
+                    Object.assign(updates, walletDelta(st.code, realCookiePaid, -vp, -mp)); // 미러 즉시 반영(학생기기)
                     try {
                         await window.dbUpdate(window.dbPath(window.db), updates);
                         saleCart = {};
@@ -2478,14 +2496,24 @@
         window._walletHash = window._walletHash || {};
         function writeWalletMirror(realStu){
             const updates = {};
+            const liveCds = {};   // 이번 stu에 존재하는 cd 집합(삭제 학생 미러 정리용)
             for (const k in realStu){
                 const s = realStu[k]; if (!s || !s.cd) continue;
+                liveCds[s.cd] = true;
                 const sc = _scanCouponInv(s.inv);
                 const w = { k, ck:(s.cookie||0), uc:(s.usedCookie||0), su:(s.shopUsed||0), vc:sc.voucher.length, mc:sc.monday.length };
                 let h; try { h = JSON.stringify(w); } catch(_) { h = null; }
                 if (h != null && window._walletHash[s.cd] === h) continue;
                 updates[`kiosk_wallet/${s.cd}`] = w;
                 if (h != null) window._walletHash[s.cd] = h;
+            }
+            // stu에서 사라진 학생의 미러(kiosk_wallet) 제거 → 유령 잔액 방지
+            // 🛡️ 단, 재연결 등으로 stu가 통째로 빈 스냅샷일 때 전체 삭제되는 사고 방지:
+            //    유효 학생이 1명 이상일 때만 정리(빈 스냅샷이면 미러 보존).
+            if (Object.keys(liveCds).length > 0) {
+                for (const cd in window._walletHash){
+                    if (!liveCds[cd]) { updates[`kiosk_wallet/${cd}`] = null; delete window._walletHash[cd]; }
+                }
             }
             if (Object.keys(updates).length) { try { window.dbUpdate(window.dbPath(window.db), updates); } catch(_){} }
         }
@@ -2514,9 +2542,14 @@
         // ctx: { code, unit, icon, title, allowQty, stockMax, onPay(cookiePaid, couponIdxUsed, qty) }
         let _payCtx = null;
         function openPayment(ctx){
-            // 학생 기기: 지갑(미러) 미로딩 상태면 무료 결제 방지
-            if (!window._isTeacher && shopAvail(ctx.code) == null) {
-                return showInfo('⏳', '잠시만요', '학생 지갑을 불러오는 중이거나 등록되지 않았어요.<br>잠시 후 다시 시도해 주세요.');
+            // 🛡️ 이벤트 상점에 매칭되는 학생이 없으면(잔액 null) 결제 차단.
+            //    교사 기기에서도 막아야 함 — 안 막으면 잔액 Infinity로 간주돼
+            //    쿠키가 전혀 차감되지 않은 채 주문만 기록되는 "무차감 결제"가 발생.
+            if (shopAvail(ctx.code) == null) {
+                return showInfo('⚠️', '결제할 수 없어요',
+                    window._isTeacher
+                        ? `이 학생(코드 ${ctx.code})이 이벤트 상점에 없습니다.<br>상점에 등록(같은 코드)되어야 쿠키가 차감돼요.`
+                        : '학생 지갑을 불러오는 중이거나 등록되지 않았어요.<br>잠시 후 다시 시도해 주세요.');
             }
             _payCtx = ctx;
             _payCtx.qty = 1;
@@ -2601,6 +2634,8 @@
         }
         // 금액 표시(+ 면 적립, - 면 차감)
         function fmtTotal(t){ return t<0 ? `+${-t}` : `-${t}`; }
+        // 통계 items 맵의 Firebase 키 안전화(. # $ / [ ] 금지문자 → _)
+        function _statItemKey(n){ return String(n==null?'상품':n).replace(/[.#$/\[\]]/g,'_') || '상품'; }
         // 이벤트 상점 가방 가용 쿠키 = cookie - usedCookie - shopUsed (없으면 null)
         function shopAvail(code){
             const k = findShopKey(code);
@@ -2642,7 +2677,12 @@
             orders.forEach(o=>{ (byBuyer[o.buyerCode] = byBuyer[o.buyerCode]||[]).push(o); });
             const sumOf = code => byBuyer[code].reduce((s,o)=>s+o.total,0);
             const buyerCodes = Object.keys(byBuyer).sort((a,b)=> sumOf(b) - sumOf(a)); // 금액 많은 순
-            if (buyerCodes.length === 0) { list.innerHTML = `<div style="text-align:center;color:#bbb;padding:40px;">주문이 없습니다.</div>`; return; }
+            if (buyerCodes.length === 0) {
+                list.innerHTML = `<div style="text-align:center;color:#bbb;padding:40px;">주문이 없습니다.</div>`;
+                // 상세 창이 열려 있으면 함께 갱신(주문이 모두 사라지면 닫힘)
+                if (document.getElementById('studentOrdersModal').style.display === 'flex' && currentSOCode) renderStudentOrders();
+                return;
+            }
             // 학생 이름별로 1줄: 합계만 표시, 클릭 시 상세 창
             list.innerHTML = buyerCodes.map(code=>{
                 const ords = byBuyer[code];
@@ -2732,15 +2772,12 @@
                         d.items[o.itemName] = (d.items[o.itemName]||0) + o.qty;
                     });
                     Object.keys(legacyDeduct).forEach(code=> Object.assign(updates, shopUsedUpdate(code, legacyDeduct[code])));
+                    // 📊 통계는 절대값 덮어쓰기 대신 원자적 increment(동시 정산/환불 경합에서 유실 방지)
                     Object.keys(statDelta).forEach(bid=>{
-                        const cur = boothStats[bid] || { settled:0, count:0, items:{} };
-                        const items = Object.assign({}, cur.items||{});
-                        Object.keys(statDelta[bid].items).forEach(n=> items[n] = (items[n]||0) + statDelta[bid].items[n]);
-                        updates[`kiosk_booth_stats/${bid}`] = {
-                            settled: (cur.settled||0) + statDelta[bid].settled,
-                            count:   (cur.count||0)   + statDelta[bid].count,
-                            items
-                        };
+                        updates[`kiosk_booth_stats/${bid}/settled`] = window.dbIncrement(statDelta[bid].settled);
+                        updates[`kiosk_booth_stats/${bid}/count`]   = window.dbIncrement(statDelta[bid].count);
+                        Object.keys(statDelta[bid].items).forEach(n=>
+                            updates[`kiosk_booth_stats/${bid}/items/${_statItemKey(n)}`] = window.dbIncrement(statDelta[bid].items[n]));
                     });
                     try {
                         await window.dbUpdate(window.dbPath(window.db), updates);
@@ -2756,6 +2793,8 @@
             showPasswordModal(`주문을 환불합니다.<br>${o.emoji||''} ${o.itemName} x${o.qty} (${o.total}🍪)<br><b style='color:#E65100'>교사 비밀번호</b>`, (pw)=>{
                 if(!adminPwOk(pw)) return alert('비밀번호가 일치하지 않습니다.');
                 showConfirmModal('↩️','환불할까요?', `🍪${cookieBack}${couponBack?` + 사용한 아이템 ${couponBack}개`:''}를 그대로 돌려줘요.`, async ()=>{
+                    // 🛡️ 이중환불 가드: 쓰기 직전 주문이 아직 존재하는지 재확인
+                    try { const ck = await window.dbGet(window.dbPath(window.db, `kiosk_orders/${id}`)); if (!ck.exists()) return alert('이미 처리(환불/정산)된 주문이에요.'); } catch(_){}
                     const updates = { [`kiosk_orders/${id}`]: null };
                     // 쿠키는 실제 차감분만 복구 (이용권/월요쿠키로 낸 부분은 쿠키로 환산하지 않음)
                     if (o.paid) Object.assign(updates, shopUsedUpdate(o.buyerCode, -cookieBack));
@@ -2772,7 +2811,13 @@
                     if (o.stockTracked && o.itemId && (boothItems[o.boothId]||{})[o.itemId]) {
                         updates[`kiosk_booth_items/${o.boothId}/${o.itemId}/stock`] = window.dbIncrement(o.qty||0);
                     }
-                    try { await window.dbUpdate(window.dbPath(window.db), updates); }
+                    try {
+                        await window.dbUpdate(window.dbPath(window.db), updates);
+                        // 리스너 반영 전이라도 열린 모달이 즉시 갱신되도록 로컬에서 먼저 제거 후 재렌더
+                        delete ordersData[id];
+                        renderOrders();
+                        renderKioskBoothStatus();
+                    }
                     catch(e){ alert('환불 실패'); }
                 });
             });
@@ -2931,18 +2976,17 @@
                 if(!adminPwOk(pw)) return alert('비밀번호가 일치하지 않습니다.');
                 const cookieBack = (o.cookiePaid != null ? o.cookiePaid : o.total);  // 실제 차감된 쿠키만 복구
                 showConfirmModal('↩️','환불할까요?', `🍪${cookieBack}${o.couponsUsed?` + 🎟️${o.couponsUsed}`:''}를 돌려줘요.`, async ()=>{
+                    // 🛡️ 이중환불 가드: 보류/정산 각각의 경로에 주문이 아직 있는지 재확인
+                    const _path = settled ? `kiosk_orders_archive/${id}` : `kiosk_orders/${id}`;
+                    try { const ck = await window.dbGet(window.dbPath(window.db, _path)); if (!ck.exists()) return alert('이미 처리(환불/정산)된 주문이에요.'); } catch(_){}
                     const updates = {};
                     if (settled) {
                         updates[`kiosk_orders_archive/${id}`] = null;
                         Object.assign(updates, shopUsedUpdate(o.buyerCode, -cookieBack));
-                        const cur = boothStats[o.boothId] || { settled:0, count:0, items:{} };
-                        const items = Object.assign({}, cur.items||{});
-                        items[o.itemName] = Math.max(0, (items[o.itemName]||0) - (o.qty||0));
-                        updates[`kiosk_booth_stats/${o.boothId}`] = {
-                            settled: Math.max(0, (cur.settled||0) - o.total),
-                            count:   Math.max(0, (cur.count||0)   - (o.qty||0)),
-                            items
-                        };
+                        // 📊 통계도 원자적 increment로 차감(경합 유실 방지)
+                        updates[`kiosk_booth_stats/${o.boothId}/settled`] = window.dbIncrement(-o.total);
+                        updates[`kiosk_booth_stats/${o.boothId}/count`]   = window.dbIncrement(-(o.qty||0));
+                        updates[`kiosk_booth_stats/${o.boothId}/items/${_statItemKey(o.itemName)}`] = window.dbIncrement(-(o.qty||0));
                     } else {
                         updates[`kiosk_orders/${id}`] = null;
                         if (o.paid) Object.assign(updates, shopUsedUpdate(o.buyerCode, -cookieBack));
@@ -2994,19 +3038,28 @@
         }
         function refundArchived(id) {
             const o = archiveCache[id]; if(!o) return;
-            showConfirmModal('↩️','정산 환불할까요?','차감된 쿠키를 돌려주고 매출에서 빼요.', async ()=>{
+            // 🍪 실제 차감된 쿠키만 복구(쿠폰 결제분은 쿠키로 환산 금지 → 과다지급 방지)
+            const cookieBack = (o.cookiePaid != null ? o.cookiePaid : o.total);
+            showConfirmModal('↩️','정산 환불할까요?',`🍪${cookieBack}${o.couponsUsed?` + 🎟️${o.couponsUsed}`:''}를 돌려주고 매출에서 빼요.`, async ()=>{
+                // 🛡️ 이중환불 가드: 캐시(archiveCache)는 비실시간 → 쓰기 직전 재확인
+                try { const ck = await window.dbGet(window.dbPath(window.db, `kiosk_orders_archive/${id}`)); if (!ck.exists()) { delete archiveCache[id]; renderArchive(); return alert('이미 환불된 주문이에요.'); } } catch(_){}
                 const updates = {};
                 updates[`kiosk_orders_archive/${id}`] = null;
                 // 이벤트 상점 가방 쿠키 되돌리기 = shopUsed 감소 (원자적)
-                Object.assign(updates, shopUsedUpdate(o.buyerCode, -o.total));
-                const cur = boothStats[o.boothId] || { settled:0, count:0, items:{} };
-                const items = Object.assign({}, cur.items||{});
-                items[o.itemName] = Math.max(0, (items[o.itemName]||0) - o.qty);
-                updates[`kiosk_booth_stats/${o.boothId}`] = {
-                    settled: Math.max(0, (cur.settled||0) - o.total),
-                    count:   Math.max(0, (cur.count||0)   - o.qty),
-                    items
-                };
+                Object.assign(updates, shopUsedUpdate(o.buyerCode, -cookieBack));
+                // 사용한 상점 이용권·월요 쿠키 슬롯도 그대로 복구
+                if (o.couponIdx && o.couponIdx.length) {
+                    const sk = findShopKey(o.buyerCode);
+                    if (sk != null) o.couponIdx.forEach(idx => updates[`ClassData/EventShop/stu/${sk}/inv/${idx}/st`] = 'active');
+                }
+                // 미러 즉시 복구(학생기기)
+                const vBack = o.voucherUsed != null ? o.voucherUsed : (o.couponsUsed || 0);
+                const mBack = o.mondayUsed != null ? o.mondayUsed : 0;
+                Object.assign(updates, walletDelta(o.buyerCode, -cookieBack, vBack, mBack));
+                // 📊 통계도 원자적 increment로 차감(경합 유실 방지)
+                updates[`kiosk_booth_stats/${o.boothId}/settled`] = window.dbIncrement(-o.total);
+                updates[`kiosk_booth_stats/${o.boothId}/count`]   = window.dbIncrement(-(o.qty||0));
+                updates[`kiosk_booth_stats/${o.boothId}/items/${_statItemKey(o.itemName)}`] = window.dbIncrement(-(o.qty||0));
                 try {
                     await window.dbUpdate(window.dbPath(window.db), updates);
                     delete archiveCache[id];

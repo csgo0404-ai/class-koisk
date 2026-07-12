@@ -323,6 +323,10 @@ input,textarea,select{font-family:'Gaegu',sans-serif}
 .pb-day-h .chev{font-size:14px;transition:transform .3s}
 .pb-day-h .chev.open{transform:rotate(90deg)}
 .pb-day-body{max-height:0;overflow:hidden;transition:max-height .35s ease}
+.pb-absent{margin:6px 12px 12px;padding:10px 14px;background:#faf3ec;border:1px dashed #e3cdbb;border-radius:12px}
+.pb-absent-h{font-size:13px;font-weight:700;color:var(--brown);margin-bottom:6px}
+.pb-absent-list{display:flex;flex-wrap:wrap;gap:2px}
+.badge-absent{background:#fff;border:1px solid #e3cdbb;color:var(--brown)}
 .pb-rec{position:relative;padding:11px 20px;padding-right:118px;border-top:1px dashed #efe2d6;display:flex;gap:14px;align-items:flex-start;
   background:repeating-linear-gradient(#fffdf7,#fffdf7 32px,#f6ecdf 33px)}
 .pb-rec .main{flex:1;min-width:0}
@@ -971,7 +975,7 @@ function showApp(){
     document.getElementById('whoLabel').textContent='선생님';
     document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
     document.getElementById('tList').classList.add('active');
-    _curView='date';renderDateView();_loadCfg();
+    _curView='date';renderDateView();_loadCfg();_startTeacherPoll(); // 학생 변경 자동 반영(1분 폴링)
   }else{
     document.getElementById('whoLabel').textContent=(localStorage.getItem('studentName')||'')+' 님';
     document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
@@ -1609,6 +1613,37 @@ function renderAll(){bindStars();renderCover();renderShelf();renderCoupons();ren
 let currentDetailCode='';let _listLoaded=false;let _studentList=[];let _detailIdx=-1;
 let _allData=null;let _curView='stu';
 
+/* ===== 교사 화면 자동 갱신 폴링 =====
+   학생이 기록을 바꾸면 교사의 날짜별/학생별/랭킹이 자동 반영되도록 1분마다 폴링.
+   초경량: getReadDigest(수십 바이트)만 확인하고, 값이 바뀐 경우에만 현재 뷰를 재조회. */
+let _teacherPollTimer=null,_teacherDigest=null;
+function _stopTeacherPoll(){if(_teacherPollTimer){clearInterval(_teacherPollTimer);_teacherPollTimer=null;}}
+function _refreshCurView(){ // 캐시 무효화 후 현재 교사 뷰만 다시 그림(펼침/필터 상태는 유지 시도)
+  _allData=null;_rankCache=null;_listLoaded=false;
+  if(_curView==='date')renderDateView();
+  else if(_curView==='rank')renderTeacherRank();
+  else loadStudentList(true);
+}
+async function _teacherPollTick(){
+  if(document.hidden)return;
+  if(localStorage.getItem('role')!=='teacher')return;
+  try{
+    const r=await apiGet('getReadDigest',{});
+    if(!r||!r.ok)return;
+    const dg=r.count+'|'+r.latest;
+    if(_teacherDigest===null){_teacherDigest=dg;return;} // 첫 tick은 기준값만 저장
+    if(dg!==_teacherDigest){_teacherDigest=dg;_refreshCurView();} // 실제 변경 시에만 재조회
+  }catch(e){}
+}
+function _startTeacherPoll(){
+  _stopTeacherPoll();
+  // 현재 다이제스트를 기준으로 seed → 이후엔 값이 바뀔 때만 재조회
+  apiGet('getReadDigest',{}).then(r=>{if(r&&r.ok)_teacherDigest=r.count+'|'+r.latest;}).catch(()=>{});
+  _teacherPollTimer=setInterval(_teacherPollTick,60000);
+  // 다른 탭/창에서 돌아오면 즉시 한 번 확인(대기 없이 최신화)
+  if(!_startTeacherPoll._vis){_startTeacherPoll._vis=true;
+    document.addEventListener('visibilitychange',()=>{if(!document.hidden&&_teacherPollTimer)_teacherPollTick();});}
+}
 /* ===== 조회 모드 전환 (날짜별 / 학생별) ===== */
 function switchView(mode,btn){
   _curView=mode;
@@ -1704,6 +1739,7 @@ async function ensureAllData(force){
 
 /* ===== 날짜별 조회: 기간 필터 + 오늘만 펼침, 클릭 시 해당 날짜 펼침/렌더 ===== */
 let _dateFilter='today'; // 새로고침/첫 진입 시 '오늘'로 시작
+let _dateRoster=[]; // 전체 학생 명단(활동 없는 학생 표시용)
 function setDateFilter(v){_dateFilter=v;renderDateView();}
 function _ymd(dObj){const p=n=>String(n).padStart(2,'0');return `${dObj.getFullYear()}-${p(dObj.getMonth()+1)}-${p(dObj.getDate())}`;}
 function _periodFrom(f){
@@ -1720,6 +1756,11 @@ async function renderDateView(){
   renderDateFilters();
   const all=await ensureAllData();
   const body=document.getElementById('dateBody');
+  if(!_studentList.length){try{await loadStudentList(true);}catch(e){}}
+  // 명단: 학생목록(_studentList) 우선, 없으면 전체데이터에서 추출
+  const rosterSrc=_studentList.length?_studentList:Object.values(all).map(d=>({code:d._code,num:d._num,name:d._name}));
+  _dateRoster=rosterSrc.map(s=>({code:s.code,num:s.num,name:s.name}))
+    .sort((a,b)=>((Number(a.num)||9999)-(Number(b.num)||9999))||String(a.name||'').localeCompare(String(b.name||''),'ko'));
   const rows=[];
   Object.values(all).forEach(d=>(d.entries||[]).forEach(e=>rows.push({name:d._name,num:d._num,code:d._code,id:e.id,title:e.title,author:e.author,note:e.note,stars:e.stars,checks:e.checks,date:e.date,rejected:e.rejected})));
   const from=_periodFrom(_dateFilter);
@@ -1734,7 +1775,7 @@ async function renderDateView(){
     dates.map((dt,di)=>`<div class="pb-day-h" onclick="toggleDateDay(${di})">
         <span>📅 ${esc(dt)} <span style="opacity:.75;font-size:14px">· ${map[dt].length}건</span></span>
         <span class="chev" id="dateChev${di}">▸</span></div>
-      <div class="pb-day-body" id="dateBody${di}" data-recs="${encodeURIComponent(JSON.stringify(map[dt]))}"></div>`).join('')+'</div>';
+      <div class="pb-day-body" id="dateBody${di}" data-date="${esc(dt)}" data-recs="${encodeURIComponent(JSON.stringify(map[dt]))}"></div>`).join('')+'</div>';
   if(_dateFilter==='today'){const ti=dates.indexOf(today);openDateDay(ti>=0?ti:0);} // 오늘만 펼침
   else dates.forEach((_,di)=>openDateDay(di)); // 이번주/이번달/전체는 기간 내역을 모두 펼쳐서 표시
 }
@@ -1752,7 +1793,16 @@ function _buildDateDay(di){
         <div class="bt"><span class="pb-stu-name"${e.code?` oncontextmenu="return openStudentPage('${esc(e.code)}')" title="우클릭: 학생 페이지 열기" style="cursor:context-menu"`:''}>${esc(e.name)}</span> — ${esc(e.title)} <span class="au">${e.author?'· '+esc(e.author):''}</span> <span style="color:var(--gold)">${'★'.repeat(e.stars||0)}</span>${e.rejected?' <span style="color:#d9534f;font-size:13px">↩️ 반려됨</span>':''}</div>
         ${e.note?`<div class="no">${esc(e.note)}</div>`:''}
         ${(e.checks&&e.checks.length)?`<div class="pb-tags">${e.checks.map(c=>`<span class="badge">${esc(c)}</span>`).join('')}</div>`:''}
-      </div></div>`).join('')||'<div class="pb-empty-day">아직 오늘 기록이 없어요.</div>';
+      </div></div>`).join('')||'<div class="pb-empty-day">아직 기록이 없어요.</div>';
+  // '오늘' 그룹에만 활동 없는 학생 명단 표시(과거 날짜는 대부분 미활동이라 노이즈 → 생략)
+  const doneCodes=new Set(recs.map(e=>e.code).filter(Boolean));
+  const absent=_dateRoster.filter(s=>s.code&&!doneCodes.has(s.code));
+  if(_dateRoster.length&&b.dataset.date===todayStr()){
+    b.innerHTML+=`<div class="pb-absent"><div class="pb-absent-h">😴 오늘 활동 없는 학생 · ${absent.length}명</div>`
+      +(absent.length?`<div class="pb-absent-list">${absent.map(s=>`<span class="badge badge-absent">${s.num?esc(String(s.num))+'. ':''}${esc(s.name)}</span>`).join('')}</div>`
+        :`<div class="pb-absent-list" style="color:var(--pink-deep)">🎉 모든 학생이 활동했어요!</div>`)
+      +`</div>`;
+  }
   b.dataset.built='1';
 }
 function _fitDateDay(di){const b=document.getElementById('dateBody'+di);if(b&&b.classList.contains('open'))b.style.maxHeight=(b.scrollHeight+10)+'px';}

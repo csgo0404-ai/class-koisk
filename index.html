@@ -327,6 +327,7 @@ input,textarea,select{font-family:'Gaegu',sans-serif}
 .pb-absent-h{font-size:13px;font-weight:700;color:var(--brown);margin-bottom:6px}
 .pb-absent-list{display:flex;flex-wrap:wrap;gap:2px}
 .badge-absent{background:#fff;border:1px solid #e3cdbb;color:var(--brown)}
+.badge-absent[onclick]:hover{border-color:var(--pink);color:var(--pink-deep);background:#fff0f5}
 .pb-rec{position:relative;padding:11px 20px;padding-right:118px;border-top:1px dashed #efe2d6;display:flex;gap:14px;align-items:flex-start;
   background:repeating-linear-gradient(#fffdf7,#fffdf7 32px,#f6ecdf 33px)}
 .pb-rec .main{flex:1;min-width:0}
@@ -962,6 +963,7 @@ async function loginStudent(){
   }catch(e){document.getElementById('loginError').textContent='⚠️ 서버 연결 실패';}
 }
 function logout(){
+  _stopTeacherPoll(); // 교사 폴링 명시적 정지(직후 reload로도 정리되지만 대기 타이머 즉시 취소)
   ['role','teacherPw','studentName','studentNum','studentCode'].forEach(k=>localStorage.removeItem(k));
   location.reload();
 }
@@ -1616,17 +1618,21 @@ let _allData=null;let _curView='stu';
 /* ===== 교사 화면 자동 갱신 폴링(적응형 백오프) =====
    학생이 기록을 바꾸면 교사의 날짜별/학생별/랭킹이 자동 반영되도록 폴링.
    초경량: getReadDigest(수십 바이트)만 확인하고, 값이 바뀐 경우에만 현재 뷰를 재조회.
-   ① 백오프: 변경 감지 시 30초로 리셋, 무변화가 이어지면 30초씩 늘려 최대 180초(조용할 땐 요청 절감).
+   ① 백오프: 변경 감지 시 60초로 리셋, 무변화가 이어지면 30초씩 늘려 최대 180초(조용할 땐 요청 절감).
    ② 숨김 탭에서는 타이머 자체를 정지 → 복귀 시 즉시 1회 확인 후 재개(백그라운드 낭비 0). */
-let _teacherPollTimer=null,_teacherDigest=null,_teacherPollMs=30000;
-const _TP_MIN=30000,_TP_MAX=180000,_TP_STEP=30000;
+let _teacherPollTimer=null,_teacherDigest=null,_teacherPollMs=60000;
+const _TP_MIN=60000,_TP_MAX=180000,_TP_STEP=30000; // 하한 60초 = getReadDigest 엣지캐시(60초)와 정합(더 촘촘히 폴링해도 캐시로 같은 값)
 function _stopTeacherPoll(){if(_teacherPollTimer){clearTimeout(_teacherPollTimer);_teacherPollTimer=null;}}
 function _scheduleTeacherPoll(){_stopTeacherPoll();_teacherPollTimer=setTimeout(_teacherPollLoop,_teacherPollMs);}
 function _refreshCurView(){ // 캐시 무효화 후 현재 교사 뷰만 다시 그림(펼침/필터 상태는 유지 시도)
   _allData=null;_rankCache=null;_listLoaded=false;
-  if(_curView==='date')renderDateView();
-  else if(_curView==='rank')renderTeacherRank();
-  else loadStudentList(true);
+  const y=window.scrollY; // innerHTML 재빌드로 인한 스크롤 튐 방지 → 렌더 완료 후 복원
+  const restore=()=>{try{window.scrollTo(0,y);}catch(e){}};
+  let p;
+  if(_curView==='date')p=renderDateView();
+  else if(_curView==='rank')p=renderTeacherRank();
+  else p=loadStudentList(true);
+  Promise.resolve(p).then(restore,restore); // 재조회(비동기) 끝나면 스크롤 위치 복원
 }
 async function _teacherPollLoop(){
   _teacherPollTimer=null;
@@ -1636,7 +1642,7 @@ async function _teacherPollLoop(){
     if(r&&r.ok){
       const dg=r.count+'|'+r.latest;
       if(_teacherDigest===null)_teacherDigest=dg;                          // 첫 확인은 기준값만
-      else if(dg!==_teacherDigest){_teacherDigest=dg;_teacherPollMs=_TP_MIN;_refreshCurView();} // 변경→30초로 리셋+재조회
+      else if(dg!==_teacherDigest){_teacherDigest=dg;_teacherPollMs=_TP_MIN;_refreshCurView();} // 변경→하한(60초)으로 리셋+재조회
       else _teacherPollMs=Math.min(_TP_MAX,_teacherPollMs+_TP_STEP);       // 무변화→간격 증가(최대 180초)
     }
   }catch(e){}
@@ -1656,7 +1662,8 @@ function _startTeacherPoll(){
 /* ===== 조회 모드 전환 (날짜별 / 학생별) ===== */
 function switchView(mode,btn){
   _curView=mode;
-  if(_teacherPollTimer){_teacherPollMs=_TP_MIN;_scheduleTeacherPoll();} // 뷰 전환 시 폴링 30초로 리셋
+  _teacherPollMs=_TP_MIN;                                   // 뷰 전환 시 폴링 하한(60초)으로 리셋 — in-flight여도 루프 끝의 재예약이 이 값을 씀
+  if(_teacherPollTimer)_scheduleTeacherPoll();              // 대기 타이머가 있으면 즉시 재예약
 
   document.querySelectorAll('#tList .nav .nav-btn').forEach(b=>b.classList.remove('active'));
   if(btn)btn.classList.add('active');
@@ -1810,7 +1817,7 @@ function _buildDateDay(di){
   const absent=_dateRoster.filter(s=>s.code&&!doneCodes.has(s.code));
   if(_dateRoster.length&&b.dataset.date===todayStr()){
     b.innerHTML+=`<div class="pb-absent"><div class="pb-absent-h">😴 오늘 활동 없는 학생 · ${absent.length}명</div>`
-      +(absent.length?`<div class="pb-absent-list">${absent.map(s=>`<span class="badge badge-absent">${s.num?esc(String(s.num))+'. ':''}${esc(s.name)}</span>`).join('')}</div>`
+      +(absent.length?`<div class="pb-absent-list">${absent.map(s=>`<span class="badge badge-absent"${s.code?` onclick="openStudentPage('${esc(s.code)}')" title="클릭: 학생 페이지 열기" style="cursor:pointer"`:''}>${s.num?esc(String(s.num))+'. ':''}${esc(s.name)}</span>`).join('')}</div>`
         :`<div class="pb-absent-list" style="color:var(--pink-deep)">🎉 모든 학생이 활동했어요!</div>`)
       +`</div>`;
   }

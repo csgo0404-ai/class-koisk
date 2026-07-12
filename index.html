@@ -820,7 +820,7 @@ async function _flushPendingChar(){
     try{
       const num=localStorage.getItem('studentNum')||'0';
       const url=await _uploadWithRetry(d.char,'read_'+_sanitizePublicId(num));
-      if(url){const cur=loadData();cur.char=url;saveData(cur,{sync:false});}
+      if(url){const cur=loadData();cur.char=url;cur.charTs=cur.charTs||Date.now();saveData(cur,{sync:false});}
     }catch(e){/* 실패 시 다음 저장 때 다시 시도 */}
   }
 }
@@ -889,7 +889,22 @@ function _mergeData(s,sSts,l){
   (older.entries||[]).forEach(e=>{if(e&&e.id&&!delIds.has(e.id))byId.set(e.id,e);});
   (newer.entries||[]).forEach(e=>{if(e&&e.id&&!delIds.has(e.id))byId.set(e.id,e);}); // 같은 id는 더 최신 쪽 채택
   const nMap=new Map();[...(s.notices||[]),...(l.notices||[])].forEach(n=>{if(n&&n.nid)nMap.set(n.nid,n);});
-  const merged=Object.assign({},older,newer); // 스칼라 필드(캐릭터 등)는 더 최신 doc 우선
+  const merged=Object.assign({},older,newer); // 스칼라 필드는 더 최신 doc 우선
+  // 캐릭터 필드군(char/charSubmitted/charRejected)은 doc-sts와 별개로 charTs가 큰 쪽을 채택.
+  // → 미동기화 로컬 캐릭터가 무관한 서버 갱신(다른 기록 반려 등)으로 doc가 server-newer가 돼도 되돌려지지 않음.
+  //   교사 반려도 charTs를 새로 찍으므로 학생의 옛 char보다 우선(둘 다 없으면 위 doc 우선 유지).
+  const sCt=+(s.charTs||0), lCt=+(l.charTs||0);
+  if(sCt||lCt){
+    const cSrc=(sCt>=lCt)?s:l; // 동률은 서버(교사 조작이 보통 나중) 우선
+    merged.char=cSrc.char||''; merged.charSubmitted=!!cSrc.charSubmitted; merged.charRejected=!!cSrc.charRejected;
+    merged.charTs=Math.max(sCt,lCt);
+  }
+  // 북 어워즈도 동일 — awardsTs가 큰 쪽 채택(학생 전용이라 미동기화 로컬 편집이 항상 최신).
+  const sAt=+(s.awardsTs||0), lAt=+(l.awardsTs||0);
+  if(sAt||lAt){
+    merged.awards=((sAt>=lAt)?s:l).awards||{};
+    merged.awardsTs=Math.max(sAt,lAt);
+  }
   merged.entries=[...byId.values()];
   merged.notices=[...nMap.values()];
   merged.delIds=[...delIds].slice(-300);
@@ -1161,13 +1176,13 @@ async function saveCharacter(){
   const num=localStorage.getItem('studentNum')||'0';
   try{
     const url=await _uploadWithRetry(dataUrl,'read_'+_sanitizePublicId(num));
-    const d=loadData();d.char=url;d.charSubmitted=true;d.charRejected=false;saveData(d);
+    const d=loadData();d.char=url;d.charSubmitted=true;d.charRejected=false;d.charTs=Date.now();saveData(d); // charTs=캐릭터 필드군 전용 버전(병합 시 doc-sts와 무관하게 최신 char 보존)
     try{localStorage.removeItem(_charDraftKey());}catch(e){} // 제출 완료 → 초안 정리
     st.textContent='';toast('캐릭터를 제출했어요 🎨');
     lockCharacter();closeDrawModal();
   }catch(e){
     // Cloudinary 실패 시 로컬 dataURL로라도 보존 — 제출 처리는 하지 않아 다시 시도 가능
-    const d=loadData();d.char=dataUrl;saveData(d,{sync:false});
+    const d=loadData();d.char=dataUrl;d.charTs=Date.now();saveData(d,{sync:false}); // 오프라인 보존분도 charTs 부여 → 이후 병합에서 서버 옛 char에 되돌려지지 않음
     updateCharPreview();
     st.textContent='⚠️ 서버 업로드 실패 — 다시 제출해 주세요.';toast('제출 실패');
   }
@@ -1584,6 +1599,7 @@ function saveAwards(){
     know:{title:document.getElementById('awPickKnow').value,reason:document.getElementById('awReasonKnow').value.trim()},
     move:{title:document.getElementById('awPickMove').value,reason:document.getElementById('awReasonMove').value.trim()}
   };
+  d.awardsTs=Date.now(); // awards 필드 전용 버전(char와 동일 — doc-sts와 무관하게 최신 awards 보존)
   saveData(d);toast('북 어워즈를 저장했어요 🏆');
 }
 
@@ -1869,6 +1885,7 @@ async function teacherDeleteRecord(code,id){
   const d=await _fetchStu(code);if(!d)return toast('불러오기 실패');
   const e=(d.entries||[]).find(x=>x.id===id);const title=e?e.title:'';
   d.entries=(d.entries||[]).filter(x=>x.id!==id);
+  (d.delIds=d.delIds||[]).push(id);if(d.delIds.length>300)d.delIds=d.delIds.slice(-300); // 툼스톤 → 학생 병합 시 부활/역전파 방지
   if(msg.trim()){(d.notices=d.notices||[]).push({nid:'n'+Date.now().toString(36)+Math.random().toString(36).slice(2,6),type:'del',title,msg:msg.trim()});}
   const r=await _saveStudentData(code,d);
   if(r&&r.ok){toast('기록을 삭제했어요'+(msg.trim()?' · 안내 전송':''));_afterTeacherOp(code,d);}else toast('저장 실패');
@@ -1920,7 +1937,7 @@ async function rejectCharacter(code,name){
   try{
     const r=await apiGet('getReadAll',{code,teacherPw:localStorage.getItem('teacherPw')});
     if(!r||!r.ok){toast('불러오기 실패');return;}
-    const d=r.data||{entries:[],awards:{}};d.charSubmitted=false;d.charRejected=true;
+    const d=r.data||{entries:[],awards:{}};d.charSubmitted=false;d.charRejected=true;d.charTs=Date.now(); // 반려는 최신 charTs로 학생 미동기화 char보다 우선
     const sr=await _saveStudentData(code,d); // rev 증가 → 학생 새로고침 시 반영
     if(sr&&sr.ok){toast('캐릭터를 반려했어요 🎨');_allData=null;}
     else toast('반려 실패: '+((sr&&sr.error)||''));

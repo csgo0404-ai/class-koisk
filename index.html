@@ -1613,40 +1613,51 @@ function renderAll(){bindStars();renderCover();renderShelf();renderCoupons();ren
 let currentDetailCode='';let _listLoaded=false;let _studentList=[];let _detailIdx=-1;
 let _allData=null;let _curView='stu';
 
-/* ===== 교사 화면 자동 갱신 폴링 =====
-   학생이 기록을 바꾸면 교사의 날짜별/학생별/랭킹이 자동 반영되도록 1분마다 폴링.
-   초경량: getReadDigest(수십 바이트)만 확인하고, 값이 바뀐 경우에만 현재 뷰를 재조회. */
-let _teacherPollTimer=null,_teacherDigest=null;
-function _stopTeacherPoll(){if(_teacherPollTimer){clearInterval(_teacherPollTimer);_teacherPollTimer=null;}}
+/* ===== 교사 화면 자동 갱신 폴링(적응형 백오프) =====
+   학생이 기록을 바꾸면 교사의 날짜별/학생별/랭킹이 자동 반영되도록 폴링.
+   초경량: getReadDigest(수십 바이트)만 확인하고, 값이 바뀐 경우에만 현재 뷰를 재조회.
+   ① 백오프: 변경 감지 시 30초로 리셋, 무변화가 이어지면 30초씩 늘려 최대 180초(조용할 땐 요청 절감).
+   ② 숨김 탭에서는 타이머 자체를 정지 → 복귀 시 즉시 1회 확인 후 재개(백그라운드 낭비 0). */
+let _teacherPollTimer=null,_teacherDigest=null,_teacherPollMs=30000;
+const _TP_MIN=30000,_TP_MAX=180000,_TP_STEP=30000;
+function _stopTeacherPoll(){if(_teacherPollTimer){clearTimeout(_teacherPollTimer);_teacherPollTimer=null;}}
+function _scheduleTeacherPoll(){_stopTeacherPoll();_teacherPollTimer=setTimeout(_teacherPollLoop,_teacherPollMs);}
 function _refreshCurView(){ // 캐시 무효화 후 현재 교사 뷰만 다시 그림(펼침/필터 상태는 유지 시도)
   _allData=null;_rankCache=null;_listLoaded=false;
   if(_curView==='date')renderDateView();
   else if(_curView==='rank')renderTeacherRank();
   else loadStudentList(true);
 }
-async function _teacherPollTick(){
-  if(document.hidden)return;
-  if(localStorage.getItem('role')!=='teacher')return;
+async function _teacherPollLoop(){
+  _teacherPollTimer=null;
+  if(document.hidden||localStorage.getItem('role')!=='teacher')return; // 숨김/비교사면 정지(재개는 visibilitychange)
   try{
     const r=await apiGet('getReadDigest',{});
-    if(!r||!r.ok)return;
-    const dg=r.count+'|'+r.latest;
-    if(_teacherDigest===null){_teacherDigest=dg;return;} // 첫 tick은 기준값만 저장
-    if(dg!==_teacherDigest){_teacherDigest=dg;_refreshCurView();} // 실제 변경 시에만 재조회
+    if(r&&r.ok){
+      const dg=r.count+'|'+r.latest;
+      if(_teacherDigest===null)_teacherDigest=dg;                          // 첫 확인은 기준값만
+      else if(dg!==_teacherDigest){_teacherDigest=dg;_teacherPollMs=_TP_MIN;_refreshCurView();} // 변경→30초로 리셋+재조회
+      else _teacherPollMs=Math.min(_TP_MAX,_teacherPollMs+_TP_STEP);       // 무변화→간격 증가(최대 180초)
+    }
   }catch(e){}
+  _scheduleTeacherPoll(); // 가변 간격으로 다음 확인 예약
 }
 function _startTeacherPoll(){
-  _stopTeacherPoll();
+  _stopTeacherPoll();_teacherPollMs=_TP_MIN;
   // 현재 다이제스트를 기준으로 seed → 이후엔 값이 바뀔 때만 재조회
   apiGet('getReadDigest',{}).then(r=>{if(r&&r.ok)_teacherDigest=r.count+'|'+r.latest;}).catch(()=>{});
-  _teacherPollTimer=setInterval(_teacherPollTick,60000);
-  // 다른 탭/창에서 돌아오면 즉시 한 번 확인(대기 없이 최신화)
+  _scheduleTeacherPoll();
   if(!_startTeacherPoll._vis){_startTeacherPoll._vis=true;
-    document.addEventListener('visibilitychange',()=>{if(!document.hidden&&_teacherPollTimer)_teacherPollTick();});}
+    document.addEventListener('visibilitychange',()=>{
+      if(document.hidden){_stopTeacherPoll();}                            // ② 숨김→타이머 정지
+      else if(localStorage.getItem('role')==='teacher'){_stopTeacherPoll();_teacherPollMs=_TP_MIN;_teacherPollLoop();} // 복귀→(기존 타이머 취소 후)즉시 확인+재개
+    });}
 }
 /* ===== 조회 모드 전환 (날짜별 / 학생별) ===== */
 function switchView(mode,btn){
   _curView=mode;
+  if(_teacherPollTimer){_teacherPollMs=_TP_MIN;_scheduleTeacherPoll();} // 뷰 전환 시 폴링 30초로 리셋
+
   document.querySelectorAll('#tList .nav .nav-btn').forEach(b=>b.classList.remove('active'));
   if(btn)btn.classList.add('active');
   document.getElementById('viewStu').classList.toggle('hidden',mode!=='stu');

@@ -165,8 +165,8 @@ input,textarea,select{font-family:'Gaegu',sans-serif}
 @keyframes eiBob{0%,100%{transform:translateY(0)}50%{transform:translateY(-7px)}}
 
 /* ===== 쿠폰 ===== */
-.coupons{display:grid;grid-template-columns:repeat(5,1fr);gap:16px}
-.coupon{aspect-ratio:1;border-radius:14px;background:var(--pink-soft);display:flex;flex-direction:column;
+.coupons{display:grid;grid-template-columns:repeat(5,1fr);grid-auto-rows:28vh;gap:18px}
+.coupon{border-radius:14px;background:var(--pink-soft);display:flex;flex-direction:column;
   align-items:center;justify-content:center;position:relative;color:var(--pink-deep);font-family:'Jua';font-size:17px}
 .coupon.star{background:#dff0ff;color:#5a9bd4;border-radius:0;clip-path:polygon(50% 0%,65.9% 28.2%,97.6% 34.5%,75.7% 58.3%,79.4% 90.5%,50% 77%,20.6% 90.5%,24.3% 58.3%,2.5% 34.5%,34.1% 28.2%)}
 .coupon .stamp{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;
@@ -984,7 +984,7 @@ function showApp(){
     document.getElementById('cover').classList.add('active');
     try{const cc=JSON.parse(localStorage.getItem('readCfgCache')||'{}');_stuCfg=Object.assign({awardHidden:!!localStorage.getItem('readAwardHidden')},cc);}catch(e){}
     applyStudentCfg(_stuCfg); // 캐시된 설정 즉시 적용
-    initCanvas();renderAll();_notifyRejects();pullData();startReloadWatch();
+    initCanvas();renderAll();pullData();startReloadWatch(); // 반려/삭제 안내는 서버 데이터를 받은 뒤(pullData 내부)에만 띄운다
   }
 }
 
@@ -1230,29 +1230,31 @@ function prettyAlert(msg,title,icon){
 /* 본 알림 id 집합 로컬 관리 */
 function _seenSet(key){try{return new Set(JSON.parse(localStorage.getItem(key)||'[]'));}catch(e){return new Set();}}
 function _markSeen(key,id){const s=_seenSet(key);s.add(id);localStorage.setItem(key,JSON.stringify([...s]));}
+/* 확인 표시: (1) 항목의 ack 플래그로 서버에 기록(공용기기·다른 브라우저에서도 유지)
+   (2) 학번별 로컬 seen 집합에도 토큰을 남겨 서버 저장이 늦거나 실패해도 재접속 시 다시 뜨지 않게 이중 보강. */
+function _ackKey(){return 'readAckSeen_'+(localStorage.getItem('studentNum')||'x');}
+function _ackHas(tok){return _seenSet(_ackKey()).has(tok);}
+function _ackAdd(tok){_markSeen(_ackKey(),tok);}
 /* 교사 반려/삭제 알림: 새 알림이 있으면 예쁜 창으로 안내(반려는 폼에 불러옴) */
 function _notifyRejects(){
   const d=loadData();
   // 1) 교사 삭제 안내(메시지 있는 것만) — 한 번에 하나씩
-  const notices=(d.notices||[]);
-  const nseen=_seenSet('readNoticeSeen');
-  const nn=notices.find(n=>!nseen.has(n.nid));
-  if(nn){_markSeen('readNoticeSeen',nn.nid);
+  const nn=(d.notices||[]).find(n=>!n.ack && !_ackHas('n:'+n.nid));
+  if(nn){nn.ack=true;_ackAdd('n:'+nn.nid);saveData(d,{sync:true});
     prettyAlert(`${nn.title?'「'+nn.title+'」 ':''}기록을 선생님이 삭제했어요.${nn.msg?'\n안내: '+nn.msg:''}`,'선생님의 안내','🗑️');
     return;
   }
-  const rejected=(d.entries||[]).filter(e=>e.rejected);
-  const charRej=!!d.charRejected;
-  if(!rejected.length && !charRej)return;
-  const sig=(charRej?'C|':'')+rejected.map(e=>e.id+':'+(e.rejectMsg||'')).join('|');
-  if(localStorage.getItem('readRejectSeen')===sig)return;
-  localStorage.setItem('readRejectSeen',sig);
-  if(charRej){ // 캐릭터 반려 안내 (표지에서 다시 그리기)
+  // 2) 캐릭터 반려 안내 (표지에서 다시 그리기)
+  if(d.charRejected && !d.charRejAck && !_ackHas('char:'+(d.charTs||0))){
+    d.charRejAck=true;_ackAdd('char:'+(d.charTs||0));saveData(d,{sync:true});
     prettyAlert('선생님이 캐릭터를 반려했어요.\n표지에서 다시 그려서 제출해요! 🎨','캐릭터 반려 안내','🎨')
       .then(()=>{showTab('cover',document.querySelector('#studentNav .nav-btn'));});
     return;
   }
-  const e=rejected[0];
+  // 3) 기록 반려 안내 — 아직 확인하지 않은 것 하나 (반려 메시지까지 토큰에 포함 → 다시 반려하면 새로 안내)
+  const e=(d.entries||[]).find(x=>x.rejected && !x.rejectAck && !_ackHas('e:'+x.id+':'+(x.rejectMsg||'')));
+  if(!e)return;
+  e.rejectAck=true;_ackAdd('e:'+e.id+':'+(e.rejectMsg||''));saveData(d,{sync:true});
   prettyAlert(`「${e.title}」 기록을 선생님이 반려했어요.\n${e.rejectMsg?'사유: '+e.rejectMsg+'\n':''}고쳐서 다시 제출해요!`,'선생님의 반려 안내','↩️')
     .then(()=>{if(typeof editEntry==='function')editEntry(e.id);});
 }
@@ -1943,7 +1945,7 @@ async function teacherRejectRecord(code,id){
   const reason=prompt('반려 사유(학생에게 표시됩니다). 비우면 기본 안내',''); if(reason===null)return;
   const d=await _fetchStu(code);if(!d)return toast('불러오기 실패');
   const e=(d.entries||[]).find(x=>x.id===id);if(!e)return toast('기록을 찾지 못했어요');
-  e.rejected=true;e.rejectMsg=reason.trim();
+  e.rejected=true;e.rejectMsg=reason.trim();e.rejectAck=false; // 새 반려 → 학생이 다시 안내를 받도록 ack 해제
   const r=await _saveStudentData(code,d);
   if(r&&r.ok){toast('기록을 반려했어요');_afterTeacherOp(code,d);}else toast('저장 실패');
 }
@@ -2005,7 +2007,7 @@ async function rejectCharacter(code,name){
   try{
     const r=await apiGet('getReadAll',{code,teacherPw:localStorage.getItem('teacherPw')});
     if(!r||!r.ok){toast('불러오기 실패');return;}
-    const d=r.data||{entries:[],awards:{}};d.charSubmitted=false;d.charRejected=true;d.charTs=Date.now(); // 반려는 최신 charTs로 학생 미동기화 char보다 우선
+    const d=r.data||{entries:[],awards:{}};d.charSubmitted=false;d.charRejected=true;d.charRejAck=false;d.charTs=Date.now(); // 반려는 최신 charTs로 학생 미동기화 char보다 우선
     const sr=await _saveStudentData(code,d); // rev 증가 → 학생 새로고침 시 반영
     if(sr&&sr.ok){toast('캐릭터를 반려했어요 🎨');_allData=null;}
     else toast('반려 실패: '+((sr&&sr.error)||''));

@@ -912,7 +912,7 @@ function _mergeData(s,sSts,l){
   }
   merged.entries=[...byId.values()];
   merged.notices=[...nMap.values()];
-  merged.delIds=[...delIds].slice(-300);
+  merged.delIds=[...delIds].slice(-2000);
   merged.sts=Math.max(sSts,lSts); // 동기화 기준 = 더 최신 서버 타임스탬프
   delete merged.ts;               // 구버전 클라 시계 필드 제거
   delete merged.dirty;            // dirty는 로컬 판단(wasDirty)으로만 사용 — 서버 blob에서 온 값 무시
@@ -1002,6 +1002,7 @@ async function _checkReload(){
     const seen=+(localStorage.getItem('readReloadSeen')||0);
     if(!seen){localStorage.setItem('readReloadSeen',String(at));return;} // 첫 방문은 이미 최신
     if(at>seen){localStorage.setItem('readReloadSeen',String(at));
+      _flushAwardsIfDirty(); // 새로고침으로 미저장 어워즈 입력이 사라지지 않게 먼저 저장
       toast('새 내용으로 새로고침할게요 🔄'); // 놀라지 않도록 잠깐 안내
       setTimeout(()=>location.reload(),700);
     }
@@ -1378,7 +1379,7 @@ async function deleteEntry(id){
   const d=loadData();const before=d.entries.length;
   d.entries=d.entries.filter(e=>e.id!==id);
   if(d.entries.length===before){toast('기록을 찾지 못했어요');return;}
-  (d.delIds=d.delIds||[]).push(id);if(d.delIds.length>300)d.delIds=d.delIds.slice(-300); // 동기화 시 부활 방지(툼스톤)
+  (d.delIds=d.delIds||[]).push(id);if(d.delIds.length>2000)d.delIds=d.delIds.slice(-2000); // 동기화 시 부활 방지(툼스톤)
   if(_recTargetId===id){_recTargetId=null;_recDirty=false;_clearForm();_updateSaveBtn();}
   saveData(d);toast('기록을 삭제했어요 🗑️');
   renderShelf();renderCoupons();
@@ -1599,6 +1600,7 @@ function renderAwardOptions(){
       document.getElementById(pk).innerHTML=opt;
       if(aw[key]){document.getElementById(pk).value=aw[key].title||'';document.getElementById(rk).value=aw[key].reason||'';}
     });
+  window._awardsRendered=true; // 입력칸이 저장값으로 채워짐 → _flushAwardsIfDirty가 안전하게 비교 가능
 }
 function saveAwards(){
   const d=loadData();
@@ -1609,6 +1611,23 @@ function saveAwards(){
   };
   d.awardsTs=Date.now(); // awards 필드 전용 버전(char와 동일 — doc-sts와 무관하게 최신 awards 보존)
   saveData(d);toast('북 어워즈를 저장했어요 🏆');
+}
+/* 🛡️ 미저장 어워즈 보호: 어워즈는 '저장' 버튼으로만 반영되므로, 강제 새로고침(_checkReload) 직전
+   입력칸이 저장값과 다르면 조용히 로컬+서버에 flush(입력 유실 방지). 변경 없으면 아무것도 안 함. */
+function _flushAwardsIfDirty(){
+  try{
+    if(!window._awardsRendered) return; // 렌더 전(입력칸이 저장값으로 안 채워짐)이면 스킵 → 빈값 덮어쓰기로 어워즈 유실 방지
+    const fp=document.getElementById('awPickFun'); if(!fp) return; // 어워즈 UI 미렌더 → 스킵
+    const v=id=>((document.getElementById(id)||{}).value||'');
+    const cur={fun:{title:v('awPickFun'),reason:v('awReasonFun').trim()},
+               know:{title:v('awPickKnow'),reason:v('awReasonKnow').trim()},
+               move:{title:v('awPickMove'),reason:v('awReasonMove').trim()}};
+    const d=loadData(), aw=d.awards||{};
+    const g=(o)=>({title:(o&&o.title)||'',reason:(o&&o.reason)||''});
+    const norm=x=>JSON.stringify([g(x.fun),g(x.know),g(x.move)]);
+    if(norm(cur)===norm({fun:aw.fun,know:aw.know,move:aw.move})) return; // 변경 없음
+    d.awards=cur; d.awardsTs=Date.now(); saveData(d); // 로컬 즉시 보존 + 서버(dirty로 다음 부팅 재push 보장)
+  }catch(e){}
 }
 
 function renderAll(){bindStars();renderCover();renderShelf();renderCoupons();renderAwardOptions();}
@@ -1923,7 +1942,30 @@ function _afterTeacherOp(code,d){ // 작업 후 현재 뷰 갱신
   else _renderStuDetail(code,d);          // 학생별은 메모리 데이터로 즉시 갱신
 }
 /* 교사: 학생 기록 수정/반려/삭제 (서버 저장 시 rev 증가 → 학생은 새로고침 시 반영, 폴링 없음) */
-async function _saveStudentData(code,data){data.ts=Date.now();return apiPost('saveReadAll',{code,data});}
+async function _saveStudentData(code,data){
+  // 🛡️ 저장 직전 서버 최신본과 union 병합 → _fetchStu~saveReadAll 사이 갭에 학생이 올린
+  //    새 기록/캐릭터가 교사의 전체 덮어쓰기로 서버에서 유실되던 문제 차단(교사 경로 유일 손실지점).
+  //    교사 수정/반려/삭제는 그대로 반영하면서, 갭 사이 학생 신규 기록만 보존한다.
+  try{
+    const fresh=await _fetchStu(code);
+    if(fresh){
+      const del=new Set([...(data.delIds||[]),...(fresh.delIds||[])]); // 툼스톤(문자열 id) 합집합 — 삭제한 기록 부활 방지
+      const byId=new Map();
+      (fresh.entries||[]).forEach(e=>{if(e&&e.id)byId.set(e.id,e);}); // 서버 먼저(갭 사이 학생 신규 기록 보존)
+      (data.entries||[]).forEach(e=>{if(e&&e.id)byId.set(e.id,e);}); // 같은 id는 교사 수정본 우선
+      data.entries=[...byId.values()].filter(e=>!del.has(e.id));      // 툼스톤 제외
+      data.delIds=[...del].slice(-2000);
+      const nMap=new Map();[...(fresh.notices||[]),...(data.notices||[])].forEach(n=>{if(n&&n.nid)nMap.set(n.nid,n);});
+      data.notices=[...nMap.values()];
+      // 캐릭터/어워즈: charTs·awardsTs가 더 큰 쪽 채택(교사 조작은 새 ts를 찍어 이기고, 갭 사이 학생 편집도 보존)
+      const fCt=+(fresh.charTs||0), dCt=+(data.charTs||0);
+      if(fCt>dCt){data.char=fresh.char||'';data.charSubmitted=!!fresh.charSubmitted;data.charRejected=!!fresh.charRejected;data.charTs=fCt;}
+      const fAt=+(fresh.awardsTs||0), dAt=+(data.awardsTs||0);
+      if(fAt>dAt){data.awards=fresh.awards||{};data.awardsTs=fAt;}
+    }
+  }catch(e){}
+  data.ts=Date.now();return apiPost('saveReadAll',{code,data});
+}
 async function _fetchStu(code){try{const r=await apiGet('getReadAll',{code,teacherPw:localStorage.getItem('teacherPw')});if(r&&r.ok&&r.data)return r.data;}catch(e){}return null;}
 function _renderStuDetail(code,d){ // 이미 가진 데이터로 재렌더(추가 요청 없음)
   const idx=_studentList.findIndex(s=>s.code===code);if(idx<0)return;
@@ -1955,7 +1997,7 @@ async function teacherDeleteRecord(code,id){
   const d=await _fetchStu(code);if(!d)return toast('불러오기 실패');
   const e=(d.entries||[]).find(x=>x.id===id);const title=e?e.title:'';
   d.entries=(d.entries||[]).filter(x=>x.id!==id);
-  (d.delIds=d.delIds||[]).push(id);if(d.delIds.length>300)d.delIds=d.delIds.slice(-300); // 툼스톤 → 학생 병합 시 부활/역전파 방지
+  (d.delIds=d.delIds||[]).push(id);if(d.delIds.length>2000)d.delIds=d.delIds.slice(-2000); // 툼스톤 → 학생 병합 시 부활/역전파 방지
   if(msg.trim()){(d.notices=d.notices||[]).push({nid:'n'+Date.now().toString(36)+Math.random().toString(36).slice(2,6),type:'del',title,msg:msg.trim()});}
   const r=await _saveStudentData(code,d);
   if(r&&r.ok){toast('기록을 삭제했어요'+(msg.trim()?' · 안내 전송':''));_afterTeacherOp(code,d);}else toast('저장 실패');

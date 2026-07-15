@@ -911,7 +911,7 @@ function _mergeData(s,sSts,l){
     merged.awardsTs=Math.max(sAt,lAt);
   }
   merged.entries=[...byId.values()];
-  merged.notices=[...nMap.values()];
+  merged.notices=[...nMap.values()].slice(-100); // 안내는 최근 100개만(무한증가 방지, 서버 _mergeReadBlob과 정합)
   merged.delIds=[...delIds].slice(-2000);
   merged.sts=Math.max(sSts,lSts); // 동기화 기준 = 더 최신 서버 타임스탬프
   delete merged.ts;               // 구버전 클라 시계 필드 제거
@@ -1386,13 +1386,22 @@ async function deleteEntry(id){
 }
 /* ===== 독서 달력(스탬프) ===== */
 let _calYM=null;
-function _normalizeEntries(){ // id 부여 + 같은 날 중복은 최신 1건만(하루 1개 제한)
+function _normalizeEntries(){ // id 부여 + 같은 날 중복은 1건만(하루 1개 제한)
   const d=loadData();let ch=false;
   d.entries.forEach((e,i)=>{if(!e.id){e.id='e'+i+'_'+Math.random().toString(36).slice(2,7);ch=true;}});
-  const seen={};const kept=[];
-  for(let i=d.entries.length-1;i>=0;i--){const e=d.entries[i];const k=e.date||'?';
-    if(seen[k]){ch=true;continue;} seen[k]=1;kept.unshift(e);}
-  if(kept.length!==d.entries.length)d.entries=kept;
+  // 같은 날 중복은 '결정적 승자(id 최대)'만 남기고 나머지는 툼스톤(delIds)으로 제거.
+  //   ★서버 병합이 union이 된 뒤로, 툼스톤 없이 그냥 drop하면 다음 pull에서 부활(+매 로드 재저장 트래픽)했음.
+  //   승자를 id로 결정적으로 고르면 두 기기가 동시에 정리해도 상호삭제(그 날 기록 전멸) 없이 같은 1건이 남음.
+  const winner={};
+  d.entries.forEach(e=>{const k=e.date||'?';if(!winner[k]||String(e.id)>String(winner[k].id))winner[k]=e;});
+  const kept=d.entries.filter(e=>winner[e.date||'?']===e); // 원래 배열 순서 유지
+  if(kept.length!==d.entries.length){
+    const keepIds=new Set(kept.map(e=>e.id));
+    d.delIds=d.delIds||[];
+    d.entries.forEach(e=>{if(e.id&&!keepIds.has(e.id))d.delIds.push(e.id);}); // 진 항목 툼스톤 → 부활/역전파 차단
+    if(d.delIds.length>2000)d.delIds=d.delIds.slice(-2000);
+    d.entries=kept;ch=true;
+  }
   if(ch){d.entries.forEach((e,i)=>e.seq=i+1);saveData(d,{sync:true});}
 }
 function renderCalendar(){
@@ -1956,7 +1965,7 @@ async function _saveStudentData(code,data){
       data.entries=[...byId.values()].filter(e=>!del.has(e.id));      // 툼스톤 제외
       data.delIds=[...del].slice(-2000);
       const nMap=new Map();[...(fresh.notices||[]),...(data.notices||[])].forEach(n=>{if(n&&n.nid)nMap.set(n.nid,n);});
-      data.notices=[...nMap.values()];
+      data.notices=[...nMap.values()].slice(-100); // 안내는 최근 100개만(서버 _mergeReadBlob과 정합)
       // 캐릭터/어워즈: charTs·awardsTs가 더 큰 쪽 채택(교사 조작은 새 ts를 찍어 이기고, 갭 사이 학생 편집도 보존)
       const fCt=+(fresh.charTs||0), dCt=+(data.charTs||0);
       if(fCt>dCt){data.char=fresh.char||'';data.charSubmitted=!!fresh.charSubmitted;data.charRejected=!!fresh.charRejected;data.charTs=fCt;}
@@ -2171,7 +2180,7 @@ async function forceReloadStudents(){
 }
 /* 전체 초기화: 확인창 + csgo10 비번 → 학생 계정·기록·캐릭터 전부 삭제(교사 설정값은 유지) */
 async function resetAllData(){
-  const ok=await prettyConfirm('학생 계정·독서 기록·캐릭터가 모두 삭제됩니다.\n(교사 설정값은 유지) 되돌릴 수 없어요. 진행할까요?','전체 초기화','삭제','⚠️');
+  const ok=await prettyConfirm('독서통장의 학생 계정·독서 기록·캐릭터가 모두 삭제됩니다.\n\n⚠️ 학생 명단(코드)은 동화책 등 다른 앱과 공유돼요 — 초기화하면 그 앱들의 로그인도 함께 사라집니다.\n(다른 앱의 기록 자체는 서버에 남아 있어, 같은 코드로 다시 등록하면 그 학생이 이어서 활동할 수 있어요.)\n\n(교사 설정값은 유지) 되돌릴 수 없어요. 진행할까요?','전체 초기화','삭제','⚠️');
   if(!ok)return;
   const pw=prompt('초기화 확인 비밀번호를 입력하세요.');
   if(pw===null)return;
@@ -2200,7 +2209,7 @@ function importAllData(input){
       await apiPost('addStudents',{students,teacherPw:localStorage.getItem('teacherPw')});
       let n=0;
       for(const code of Object.keys(data)){
-        try{await apiPost('saveReadAll',{code,data:data[code]});n++;}catch(e){}
+        try{await apiPost('saveReadAll',{code,data:data[code],replace:true,teacherPw:localStorage.getItem('teacherPw')});n++;}catch(e){}
       }
       _regStatus(`✅ 불러오기 완료 (학생 ${students.length}명, 기록 ${n}건)`);
       loadStudentList(true);

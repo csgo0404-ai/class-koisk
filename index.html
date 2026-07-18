@@ -862,9 +862,15 @@ function _setSync(state,msg){ // 저장 상태 배지(있으면) 갱신
   el.title=msg||'';
 }
 let _saveSeq=0; // 매 sync 저장마다 증가 — 진행 중 새 편집이 있으면 옛 응답이 dirty를 못 지우게 하는 토큰
+let _quotaWarned=false; // 로컬 쿼터초과 안내 1회 제한(성공 시 리셋)
 function saveData(d,{sync=true}={}){
   if(sync)d.dirty=true; // 아직 서버에 확정되지 않은 로컬 변경 표시(오프라인 유실 방지 기준)
-  localStorage.setItem(dataKey(),JSON.stringify(d)); // 로컬은 항상 즉시 보존
+  // 로컬은 항상 즉시 보존 — 단 쿼터 초과(저사양/시크릿/스토리지 부족)로 실패해도 예외를 caller로
+  //   던지지 않는다. 옛 동작: saveRecord/saveAwards/deleteEntry가 예외로 중단돼 방금 push한 기록이
+  //   로컬·서버 어디에도 안 남고 "제출했어요" 토스트·폼 비우기도 안 돼 사용자가 성공/실패를 알 수 없었다.
+  //   실패해도 아래 서버 sync는 그대로 진행한다(payload는 in-memory d라 새 기록 포함) → 최소 서버엔 남는다.
+  try{ localStorage.setItem(dataKey(),JSON.stringify(d)); _quotaWarned=false; }
+  catch(e){ if(!_quotaWarned){ _quotaWarned=true; try{ toast('⚠️ 저장공간이 가득 차 이 기기에 저장 못 했어요 — 인터넷에 연결하면 서버에 저장돼요'); }catch(_){} } }
   if(!sync)return;
   const code=localStorage.getItem('studentCode');
   if(!code){_setSync('err','로그인 코드가 없어 서버에 저장되지 않았어요(미리보기 화면일 수 있어요)');return;}

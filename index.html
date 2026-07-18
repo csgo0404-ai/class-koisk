@@ -861,6 +861,7 @@ function _setSync(state,msg){ // 저장 상태 배지(있으면) 갱신
   el.textContent=state==='ok'?'☁️ 저장됨':state==='saving'?'⏳ 저장 중':'⚠️ '+(msg||'서버 저장 실패');
   el.title=msg||'';
 }
+let _saveSeq=0; // 매 sync 저장마다 증가 — 진행 중 새 편집이 있으면 옛 응답이 dirty를 못 지우게 하는 토큰
 function saveData(d,{sync=true}={}){
   if(sync)d.dirty=true; // 아직 서버에 확정되지 않은 로컬 변경 표시(오프라인 유실 방지 기준)
   localStorage.setItem(dataKey(),JSON.stringify(d)); // 로컬은 항상 즉시 보존
@@ -868,11 +869,18 @@ function saveData(d,{sync=true}={}){
   const code=localStorage.getItem('studentCode');
   if(!code){_setSync('err','로그인 코드가 없어 서버에 저장되지 않았어요(미리보기 화면일 수 있어요)');return;}
   _setSync('saving');
+  const mySeq=++_saveSeq; // 이 push 이후 새 저장이 생기면 _saveSeq가 앞서감 → 아래에서 dirty 유지
   const payload=Object.assign({},d);delete payload.dirty;delete payload.sts; // 클라 전용 필드는 서버에 안 보냄
   apiPost('saveReadAll',{code,data:payload}).then(r=>{
     if(r&&r.ok){_setSync('ok');
       // 서버가 확정한 저장 시각(sts)을 기준으로 저장 → 시계 차이와 무관한 동기화 기준
-      if(r.sts){try{const cur=loadData();if(+r.sts>=(+cur.sts||0))cur.sts=+r.sts;cur.dirty=false;localStorage.setItem(dataKey(),JSON.stringify(cur));}catch(e){}}
+      // ⚠️ 단, 이 push 이후 새 편집이 있었다면(mySeq!==_saveSeq) dirty를 지우지 않는다 —
+      //    옛 응답이 미전송된 최신 편집의 dirty를 지워 재전송이 누락되던 문제 차단.
+      try{const cur=loadData();
+        if(r.sts&&+r.sts>=(+cur.sts||0))cur.sts=+r.sts;
+        if(mySeq===_saveSeq)cur.dirty=false; // 최신 저장일 때만 clean 처리
+        localStorage.setItem(dataKey(),JSON.stringify(cur));
+      }catch(e){}
     }
     else _setSync('err','서버 저장 실패: '+((r&&r.error)||'응답 오류'));
   }).catch(()=>_setSync('err','서버 연결 실패(네트워크)'));
@@ -882,6 +890,14 @@ function saveData(d,{sync=true}={}){
    - entries는 id별 합집합. 같은 id는 최신 doc 쪽 채택. 한쪽에만 있으면 보존(오프라인에 쓴 기록 유실 방지).
    - 삭제는 delIds(툼스톤) 합집합으로 반영 → 병합해도 지워진 기록이 되살아나지 않음.
    - notices도 nid 합집합으로 보존. */
+/* 같은 id 엔트리 충돌 시 승자 선택: eTs(엔트리 편집 시각)가 큰 쪽 채택.
+   교사 정정/반려는 새 eTs를 찍으므로 학생의 stale flush(옛 eTs)보다 우선 → 정정이 되돌려지지 않음.
+   둘 다 eTs 없으면(레거시 기록) 기존 동작 유지: cur(나중 순회=더 최신 doc/incoming) 채택. */
+function _pickEntry(prev,cur){
+  const pt=+((prev&&prev.eTs)||0), ct=+((cur&&cur.eTs)||0);
+  if(pt||ct) return ct>=pt?cur:prev; // eTs 큰 쪽; 동률은 cur(나중)
+  return cur;
+}
 function _mergeData(s,sSts,l){
   s=s||{};l=l||{};
   const lSts=+(l.sts||0);
@@ -892,7 +908,7 @@ function _mergeData(s,sSts,l){
   const delIds=new Set([...(s.delIds||[]),...(l.delIds||[])]);
   const byId=new Map();
   (older.entries||[]).forEach(e=>{if(e&&e.id&&!delIds.has(e.id))byId.set(e.id,e);});
-  (newer.entries||[]).forEach(e=>{if(e&&e.id&&!delIds.has(e.id))byId.set(e.id,e);}); // 같은 id는 더 최신 쪽 채택
+  (newer.entries||[]).forEach(e=>{if(e&&e.id&&!delIds.has(e.id)){const p=byId.get(e.id);byId.set(e.id,p?_pickEntry(p,e):e);}}); // 같은 id는 eTs 큰 쪽(교사 정정 보호)
   const nMap=new Map();[...(s.notices||[]),...(l.notices||[])].forEach(n=>{if(n&&n.nid)nMap.set(n.nid,n);});
   const merged=Object.assign({},older,newer); // 스칼라 필드는 더 최신 doc 우선
   // 캐릭터 필드군(char/charSubmitted/charRejected)은 doc-sts와 별개로 charTs가 큰 쪽을 채택.
@@ -927,7 +943,8 @@ async function pullData(){
     const merged=_mergeData(s,sSts,local);
     localStorage.setItem(dataKey(),JSON.stringify(merged)); // 로컬은 병합 결과로 갱신(전면 덮어쓰기 아님)
     // 구조가 서버와 다르거나(보존한 로컬 기록/삭제/알림) 미반영 로컬 편집이 있으면 서버로 밀어넣기
-    const sig=x=>JSON.stringify({e:(x.entries||[]).map(e=>e.id).sort(),d:(x.delIds||[]).slice().sort(),n:(x.notices||[]).map(n=>n.nid).sort(),c:x.char||'',cs:!!x.charSubmitted,cr:!!x.charRejected});
+    // e에 eTs를 함께 넣어 '제자리 수정(id 그대로, 내용/eTs만 변경)'도 서버와의 차이로 감지 → 재전송 누락 방지.
+    const sig=x=>JSON.stringify({e:(x.entries||[]).map(e=>e.id+':'+(+e.eTs||0)).sort(),d:(x.delIds||[]).slice().sort(),n:(x.notices||[]).map(n=>n.nid).sort(),c:x.char||'',cs:!!x.charSubmitted,cr:!!x.charRejected,at:+(x.awardsTs||0),ct:+(x.charTs||0)});
     if(wasDirty||sig(merged)!==sig(s))saveData(merged,{sync:true}); // saveData가 성공 시 sts 확정
     refreshCharLock();renderAll();_notifyRejects();
   }catch(e){}
@@ -1337,7 +1354,7 @@ async function saveRecord(){
   const d=loadData();
   if(_recTargetId){ // 기존 기록 수정 후 다시 제출(독서통장에서 불러온 경우 포함)
     const e=d.entries.find(x=>x.id===_recTargetId);
-    if(e){e.title=title;e.author=author;e.stars=curStars;e.checks=checks;e.note=note;e.rejected=false;e.rejectMsg='';}
+    if(e){e.title=title;e.author=author;e.stars=curStars;e.checks=checks;e.note=note;e.rejected=false;e.rejectMsg='';e.eTs=Date.now();}
     saveData(d);toast('기록을 수정했어요 ✏️');
     _recTargetId=null;_recDirty=false;_clearForm(); // 수정 후 폼 비움(초안은 유지)
     renderShelf();renderCoupons();_updateSaveBtn();_checkReload();return;
@@ -1346,7 +1363,7 @@ async function saveRecord(){
   if(d.entries.some(x=>x.date===todayStr())){toast('오늘은 이미 기록했어요');loadTodayRecord();return;}
   const before=d.entries.length;
   const ne={id:'e'+d.entries.length+'_'+Math.random().toString(36).slice(2,8),
-    seq:d.entries.length+1,title,author,date:todayStr(),stars:curStars,checks,note};
+    seq:d.entries.length+1,title,author,date:todayStr(),stars:curStars,checks,note,eTs:Date.now()};
   d.entries.push(ne);_recTargetId=null;_recDirty=false;
   saveData(d);clearDraft();_clearForm(); // 제출 완료 → 초안 삭제 + 폼 비움
   const total=d.entries.length;
@@ -1600,16 +1617,37 @@ async function renderRanking(force){
 }
 
 /* ================= 북 어워즈 ================= */
+/* 어워즈 미저장 입력 보호: 기록 폼과 동일하게 입력마다 로컬 draft 저장(서버 전송 없음).
+   '저장' 안 누르고 탭 이동/닫아도 다시 렌더 시 복원 → 타이핑 유실 방지. saveAwards에서 draft 정리. */
+function _awardDraftKey(){return 'readAwardDraft_'+(localStorage.getItem('studentNum')||'x');}
+function _saveAwardDraft(){
+  try{const v=id=>((document.getElementById(id)||{}).value||'');
+    localStorage.setItem(_awardDraftKey(),JSON.stringify({
+      fun:{title:v('awPickFun'),reason:v('awReasonFun')},
+      know:{title:v('awPickKnow'),reason:v('awReasonKnow')},
+      move:{title:v('awPickMove'),reason:v('awReasonMove')}}));
+  }catch(e){}
+}
+let _awardBound=false;
+function _bindAwardDraftOnce(){
+  if(_awardBound)return;_awardBound=true;
+  ['awPickFun','awReasonFun','awPickKnow','awReasonKnow','awPickMove','awReasonMove']
+    .forEach(id=>{const el=document.getElementById(id);if(el){el.addEventListener('input',_saveAwardDraft);el.addEventListener('change',_saveAwardDraft);}});
+}
 function renderAwardOptions(){
   const d=loadData();const titles=[...new Set(d.entries.map(e=>e.title.trim()))];
   const opt='<option value="">— 책 선택 —</option>'+titles.map(t=>`<option>${esc(t)}</option>`).join('');
   const aw=d.awards||{};
+  // 미저장 draft가 있으면 저장값보다 우선(=최신 타이핑) — 없으면 저장값 사용
+  let draft=null;try{draft=JSON.parse(localStorage.getItem(_awardDraftKey())||'null');}catch(e){}
   [['awPickFun','awReasonFun','fun'],['awPickKnow','awReasonKnow','know'],['awPickMove','awReasonMove','move']]
     .forEach(([pk,rk,key])=>{
       document.getElementById(pk).innerHTML=opt;
-      if(aw[key]){document.getElementById(pk).value=aw[key].title||'';document.getElementById(rk).value=aw[key].reason||'';}
+      const src=(draft&&draft[key])?draft[key]:aw[key];
+      if(src){document.getElementById(pk).value=src.title||'';document.getElementById(rk).value=src.reason||'';}
     });
-  window._awardsRendered=true; // 입력칸이 저장값으로 채워짐 → _flushAwardsIfDirty가 안전하게 비교 가능
+  _bindAwardDraftOnce();
+  window._awardsRendered=true; // 입력칸이 저장값(또는 draft)으로 채워짐 → _flushAwardsIfDirty가 안전하게 비교 가능
 }
 function saveAwards(){
   const d=loadData();
@@ -1619,7 +1657,9 @@ function saveAwards(){
     move:{title:document.getElementById('awPickMove').value,reason:document.getElementById('awReasonMove').value.trim()}
   };
   d.awardsTs=Date.now(); // awards 필드 전용 버전(char와 동일 — doc-sts와 무관하게 최신 awards 보존)
-  saveData(d);toast('북 어워즈를 저장했어요 🏆');
+  saveData(d);
+  try{localStorage.removeItem(_awardDraftKey());}catch(e){} // 저장 완료 → 미저장 draft 정리
+  toast('북 어워즈를 저장했어요 🏆');
 }
 /* 🛡️ 미저장 어워즈 보호: 어워즈는 '저장' 버튼으로만 반영되므로, 강제 새로고침(_checkReload) 직전
    입력칸이 저장값과 다르면 조용히 로컬+서버에 flush(입력 유실 방지). 변경 없으면 아무것도 안 함. */
@@ -1636,6 +1676,7 @@ function _flushAwardsIfDirty(){
     const norm=x=>JSON.stringify([g(x.fun),g(x.know),g(x.move)]);
     if(norm(cur)===norm({fun:aw.fun,know:aw.know,move:aw.move})) return; // 변경 없음
     d.awards=cur; d.awardsTs=Date.now(); saveData(d); // 로컬 즉시 보존 + 서버(dirty로 다음 부팅 재push 보장)
+    try{localStorage.removeItem(_awardDraftKey());}catch(e){} // 커밋 완료 → draft 정리(잔재 방지)
   }catch(e){}
 }
 
@@ -1961,7 +2002,7 @@ async function _saveStudentData(code,data){
       const del=new Set([...(data.delIds||[]),...(fresh.delIds||[])]); // 툼스톤(문자열 id) 합집합 — 삭제한 기록 부활 방지
       const byId=new Map();
       (fresh.entries||[]).forEach(e=>{if(e&&e.id)byId.set(e.id,e);}); // 서버 먼저(갭 사이 학생 신규 기록 보존)
-      (data.entries||[]).forEach(e=>{if(e&&e.id)byId.set(e.id,e);}); // 같은 id는 교사 수정본 우선
+      (data.entries||[]).forEach(e=>{if(e&&e.id){const p=byId.get(e.id);byId.set(e.id,p?_pickEntry(p,e):e);}}); // 같은 id는 eTs 큰 쪽(교사 정정 우선, 갭 사이 학생 최신편집 보존)
       data.entries=[...byId.values()].filter(e=>!del.has(e.id));      // 툼스톤 제외
       data.delIds=[...del].slice(-2000);
       const nMap=new Map();[...(fresh.notices||[]),...(data.notices||[])].forEach(n=>{if(n&&n.nid)nMap.set(n.nid,n);});
@@ -1988,7 +2029,7 @@ async function teacherEditRecord(code,id){
   const author=prompt('지은이',e.author||'');if(author===null)return;
   const note=prompt('느낀 점',e.note||'');if(note===null)return;
   const stars=prompt('별점 (0~5)',String(e.stars||0));if(stars===null)return;
-  e.title=title.trim()||e.title;e.author=author.trim();e.note=note;e.stars=Math.max(0,Math.min(5,parseInt(stars)||0));e.rejected=false;
+  e.title=title.trim()||e.title;e.author=author.trim();e.note=note;e.stars=Math.max(0,Math.min(5,parseInt(stars)||0));e.rejected=false;e.eTs=Date.now();
   const r=await _saveStudentData(code,d);
   if(r&&r.ok){toast('기록을 수정했어요');_afterTeacherOp(code,d);}else toast('저장 실패');
 }
@@ -1996,7 +2037,7 @@ async function teacherRejectRecord(code,id){
   const reason=prompt('반려 사유(학생에게 표시됩니다). 비우면 기본 안내',''); if(reason===null)return;
   const d=await _fetchStu(code);if(!d)return toast('불러오기 실패');
   const e=(d.entries||[]).find(x=>x.id===id);if(!e)return toast('기록을 찾지 못했어요');
-  e.rejected=true;e.rejectMsg=reason.trim();e.rejectAck=false; // 새 반려 → 학생이 다시 안내를 받도록 ack 해제
+  e.rejected=true;e.rejectMsg=reason.trim();e.rejectAck=false;e.eTs=Date.now(); // 새 반려 → 학생이 다시 안내를 받도록 ack 해제(eTs로 학생 stale flush보다 우선)
   const r=await _saveStudentData(code,d);
   if(r&&r.ok){toast('기록을 반려했어요');_afterTeacherOp(code,d);}else toast('저장 실패');
 }
